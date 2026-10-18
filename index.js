@@ -51,6 +51,7 @@ async function startBot() {
   try {
     const baileys = await import("baileys");
     const makeWASocket = baileys.default || baileys.makeWASocket;
+    const Browsers = baileys.Browsers;
     const useMultiFileAuthState = baileys.useMultiFileAuthState;
     const fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
     const DisconnectReason = baileys.DisconnectReason || {};
@@ -84,7 +85,9 @@ async function startBot() {
       auth: state,
       logger: pino({ level: "silent" }),
       printQRInTerminal: false,
-      browser: ["GALAXY-MD", "Chrome", config.version],
+      browser: typeof Browsers?.macOS === "function"
+        ? Browsers.macOS("Safari")
+        : ["Mac OS", "Safari", config.version],
       markOnlineOnConnect: false,
       syncFullHistory: false,
     });
