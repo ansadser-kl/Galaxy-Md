@@ -108,7 +108,9 @@ async function startBot() {
 
         console.log(
           "[GALAXY-MD] Connection closed.",
-          loggedOut ? "WhatsApp logged out; delete session and relink if needed." : "Reconnecting in 3 seconds..."
+          "Status:", statusCode ?? "unknown",
+          "| Error:", lastDisconnect?.error?.message || "Unknown error",
+          "| Detail:", lastDisconnect?.error?.output?.payload?.message || "No extra detail"
         );
 
         starting = false;
