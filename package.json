@@ -1,0 +1,17 @@
+{
+  "name": "galaxy-md",
+  "version": "1.0.0",
+  "description": "GALAXY-MD WhatsApp bot for Termux, VPS, and PC",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": ["whatsapp", "bot", "baileys", "galaxy-md"],
+  "license": "MIT",
+  "dependencies": {
+    "baileys": "7.0.0-rc14",
+    "dotenv": "^16.4.7",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
