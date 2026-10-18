@@ -11,6 +11,7 @@ const pino = require("pino");
 const config = require("./config");
 
 const SESSION_DIR = path.join(__dirname, "session");
+const PLUGINS_DIR = path.join(__dirname, "plugins");
 let reconnectTimer = null;
 let starting = false;
 
@@ -30,18 +31,26 @@ function getMessageText(message) {
   ).trim();
 }
 
-function makeMenu() {
-  return [
-    `╭━━〔 *${config.botName}* 〕━━╮`,
-    "┃",
-    "┃  .ping  — Check response",
-    "┃  .alive — Bot status",
-    "┃  .menu  — Show commands",
-    "┃  .echo  — Repeat text",
-    "┃",
-    "╰━━━━━━━━━━━━━━━━━━╯",
-    "_More commands will be added in future updates._",
-  ].join("\n");
+function loadPlugins() {
+  fs.mkdirSync(PLUGINS_DIR, { recursive: true });
+  const plugins = [];
+
+  for (const file of fs.readdirSync(PLUGINS_DIR).filter((name) => name.endsWith(".js")).sort()) {
+    const fullPath = path.join(PLUGINS_DIR, file);
+    try {
+      delete require.cache[require.resolve(fullPath)];
+      const plugin = require(fullPath);
+      if (!plugin || typeof plugin.name !== "string" || typeof plugin.execute !== "function") {
+        console.warn(`[GALAXY-MD] Skipping invalid plugin: ${file}`);
+        continue;
+      }
+      plugins.push(plugin);
+    } catch (error) {
+      console.error(`[GALAXY-MD] Failed to load plugin ${file}:`, error.message || error);
+    }
+  }
+
+  return plugins;
 }
 
 async function startBot() {
@@ -60,10 +69,11 @@ async function startBot() {
       throw new Error("Required Baileys exports are missing. Check the installed Baileys version.");
     }
 
+    // Keep the same local session folder between restarts. Do not delete it on startup.
     fs.mkdirSync(SESSION_DIR, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
 
-    // Pairing-code-only login: do not display or generate QR codes.
+    // Only request a new pairing code when this session has not been registered.
     if (!state.creds.registered && !config.botNumber) {
       console.error("[GALAXY-MD] BOT_NUMBER is missing. Add BOT_NUMBER=countrycode+number to your .env file.");
       starting = false;
@@ -92,13 +102,14 @@ async function startBot() {
       syncFullHistory: false,
     });
 
+    // Persist updated credentials/keys so the linked session can be reused after restart.
     sock.ev.on("creds.update", saveCreds);
 
     sock.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect } = update;
 
       if (connection === "connecting") {
-        console.log("[GALAXY-MD] Connecting to WhatsApp...");
+        console.log("[GALAXY-MD] Connecting to WhatsApp using saved session when available...");
       }
 
       if (connection === "open") {
@@ -126,7 +137,7 @@ async function startBot() {
       }
     });
 
-    // Pairing-code-only login using BOT_NUMBER from .env.
+    // Pairing-code login is only used for a fresh/unregistered session.
     if (!state.creds.registered) {
       const number = String(config.botNumber).replace(/\D/g, "");
       if (number.length >= 8) {
@@ -168,25 +179,25 @@ async function startBot() {
           const command = commandRaw.toLowerCase();
           const query = args.join(" ");
 
-          if (command === "ping") {
-            await sock.sendMessage(jid, { text: "🏓 PONG!" }, { quoted: message });
-          } else if (command === "alive") {
-            await sock.sendMessage(
-              jid,
-              {
-                text: `╭━━〔 *${config.botName}* 〕━━╮\n┃ Status: Online ✅\n┃ Prefix: ${config.prefix}\n┃ Version: ${config.version}\n╰━━━━━━━━━━━━━━━━━━╯`,
-              },
-              { quoted: message }
-            );
-          } else if (command === "menu" || command === "help") {
-            await sock.sendMessage(jid, { text: makeMenu() }, { quoted: message });
-          } else if (command === "echo") {
-            await sock.sendMessage(
-              jid,
-              { text: query || `Usage: ${config.prefix}echo your text` },
-              { quoted: message }
-            );
-          }
+          // Reload plugins while handling commands, so newly added .js plugins are picked up.
+          const plugins = loadPlugins();
+          const plugin = plugins.find((item) =>
+            item.name.toLowerCase() === command ||
+            (Array.isArray(item.aliases) && item.aliases.some((alias) => String(alias).toLowerCase() === command))
+          );
+
+          if (!plugin) continue;
+
+          await plugin.execute({
+            sock,
+            jid,
+            message,
+            args,
+            query,
+            command,
+            config,
+            plugins,
+          });
         } catch (error) {
           console.error("[GALAXY-MD] Message handler error:", error.message || error);
         }
