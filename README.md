@@ -5,16 +5,11 @@ A WhatsApp bot using **Baileys 7.0.0-rc14** and **CommonJS .js files**, for Andr
 ## Features
 
 - **Pairing-code login only** — no QR code flow
-- Read phone number from `.env` using `BOT_NUMBER`
+- Reads phone number from `.env` using `BOT_NUMBER`
+- Saves WhatsApp auth data in `session/` and reuses it after restarts
 - Automatic reconnect after temporary disconnects
-- Commands: `.ping`, `.alive`, `.menu`, `.echo`
-- Local session storage in `session/` (excluded from Git)
-
-## Requirements
-
-- Node.js 20 or newer recommended
-- npm
-- A WhatsApp account to link
+- Commands loaded from individual `.js` files in `plugins/`
+- Built-in commands: `.ping`, `.alive`, `.menu`, `.echo`
 
 ## Install and start
 
@@ -37,18 +32,36 @@ Replace the example with your own number. Do not include a plus sign or spaces. 
 npm start
 ```
 
-The pairing code will appear in the terminal. On your phone, open WhatsApp → **Linked devices** → **Link with phone number**, then enter the code.
+The pairing code is requested only if the saved session is not registered. After you link WhatsApp, keep the `session/` folder in place; on later restarts the bot should reuse it instead of asking for a new code.
 
-## Commands
+## Adding commands/plugins
 
-- `.ping` — Reply with PONG
-- `.alive` — Show bot status
-- `.menu` — Show command menu
-- `.echo hello` — Repeat text
+Create a `.js` file inside `plugins/`. Each plugin should export an object with a unique `name`, optional `aliases`, a `description`, and an async `execute` function.
+
+Example:
+
+```js
+"use strict";
+
+module.exports = {
+  name: "hello",
+  aliases: ["hi"],
+  description: "Say hello",
+  async execute({ sock, jid, message, query }) {
+    await sock.sendMessage(
+      jid,
+      { text: query ? `Hello, ${query}!` : "Hello!" },
+      { quoted: message }
+    );
+  },
+};
+```
+
+The bot reloads the plugin files when processing a command, so a newly added plugin can be picked up without changing `index.js`. Commands use the `.` prefix by default.
 
 ## Important
 
-- The real `.env` file and `session/` folder must remain private; never upload or share them.
+- Keep the real `.env` file and `session/` folder private; never upload or share them.
 - `.env.example` is only a template.
+- Do not delete `session/` unless you intentionally want to relink the WhatsApp account.
 - Run only one live bot instance using the same session at a time.
-- API downloader and plugin commands can be added next.
