@@ -4,5 +4,6 @@ module.exports = {
   botName: "GALAXY-MD",
   prefix: ".",
   version: "1.0.0",
-  pairingNumber: process.env.PAIRING_NUMBER || "",
+  // WhatsApp number with country code, digits only; loaded from .env.
+  botNumber: process.env.BOT_NUMBER || "",
 };
