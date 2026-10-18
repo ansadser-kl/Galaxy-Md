@@ -8,7 +8,6 @@ require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
-const qrcode = require("qrcode-terminal");
 const config = require("./config");
 
 const SESSION_DIR = path.join(__dirname, "session");
@@ -63,6 +62,13 @@ async function startBot() {
     fs.mkdirSync(SESSION_DIR, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
 
+    // Pairing-code-only login: do not display or generate QR codes.
+    if (!state.creds.registered && !config.botNumber) {
+      console.error("[GALAXY-MD] BOT_NUMBER is missing. Add BOT_NUMBER=countrycode+number to your .env file.");
+      starting = false;
+      return;
+    }
+
     let version;
     if (typeof fetchLatestBaileysVersion === "function") {
       try {
@@ -86,12 +92,7 @@ async function startBot() {
     sock.ev.on("creds.update", saveCreds);
 
     sock.ev.on("connection.update", async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-
-      if (qr && !state.creds.registered && !config.pairingNumber) {
-        console.log("\n[GALAXY-MD] Scan QR in WhatsApp → Linked devices:\n");
-        qrcode.generate(qr, { small: true });
-      }
+      const { connection, lastDisconnect } = update;
 
       if (connection === "connecting") {
         console.log("[GALAXY-MD] Connecting to WhatsApp...");
@@ -120,21 +121,25 @@ async function startBot() {
       }
     });
 
-    // Optional phone-number pairing login: PAIRING_NUMBER=countrycode+number (digits only).
-    if (!state.creds.registered && config.pairingNumber) {
-      const number = String(config.pairingNumber).replace(/\D/g, "");
+    // Pairing-code-only login using BOT_NUMBER from .env.
+    if (!state.creds.registered) {
+      const number = String(config.botNumber).replace(/\D/g, "");
       if (number.length >= 8) {
         setTimeout(async () => {
           try {
             const code = await sock.requestPairingCode(number);
-            console.log("\n[GALAXY-MD] Pairing code:", code);
+            console.log("\n╔══════════════════════════════╗");
+            console.log("║     GALAXY-MD PAIR CODE      ║");
+            console.log("╚══════════════════════════════╝");
+            console.log("\nPAIRING CODE:", code);
             console.log("WhatsApp → Linked devices → Link with phone number.\n");
           } catch (error) {
             console.error("[GALAXY-MD] Pairing code request failed:", error.message || error);
           }
         }, 2000);
       } else {
-        console.warn("[GALAXY-MD] PAIRING_NUMBER looks invalid; include country code and digits only.");
+        console.error("[GALAXY-MD] BOT_NUMBER looks invalid. Include country code and digits only, e.g. 919876543210.");
+        starting = false;
       }
     }
 
