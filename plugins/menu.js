@@ -35,8 +35,8 @@ module.exports = {
   aliases: ["help", "commands"],
   description: "Shows the Galaxy-MD command menu with an image.",
   async execute({ sock, jid, message, config, plugins }) {
-    const stars = ["✦", "✯", "✰", "◬", "✧"];
-    const star = stars[Math.floor(Math.random() * stars.length)];
+    const glyphs = ["✦", "✧", "✶", "✷", "⟡"];
+    const glyph = glyphs[Math.floor(Math.random() * glyphs.length)];
     const data = readData();
     const prefix = String(data.prefix || config.prefix || ".");
     const botName = String(data.botName || config.botName || "GALAXY-MD");
@@ -45,43 +45,50 @@ module.exports = {
     const used = bytesToSize(os.totalmem() - os.freemem());
     const total = bytesToSize(os.totalmem());
     const version = String(config.version || "1.0.0");
-    const sender = String(message.pushName || message.senderName || "User").replace(/[\r\n]+/g, "").slice(0, 60);
+    const sender = String(message.pushName || message.senderName || "User")
+      .replace(/[\\r\\n]+/g, "").slice(0, 60);
 
     const groups = new Map();
     for (const plugin of plugins || []) {
       const category = String(plugin.category || plugin.use || "General");
-      for (const name of commandName(plugin)) {
-        if (!groups.has(category)) groups.set(category, []);
-        groups.get(category).push(name);
-      }
+      const names = commandName(plugin);
+      if (!names.length) continue;
+      if (!groups.has(category)) groups.set(category, []);
+      groups.get(category).push(...names);
     }
 
     let index = 0;
     let commandText = "";
     for (const [category, names] of groups) {
-      commandText += "\n\n╭════〘 *_" + category.charAt(0).toUpperCase() + category.slice(1) + "_* 〙════⊷❍\n";
-      for (const name of [...new Set(names)].sort((a, b) => a.localeCompare(b))) {
+      const uniqueNames = [...new Set(names)].sort((a, b) => a.localeCompare(b));
+      commandText += "\\n\\n╭─『 *" + category.toUpperCase() + "* 』\n";
+      for (const name of uniqueNames) {
         index++;
-        commandText += "┃" + star + "│ _\x60" + index + ".\x60 " + prefix + name + "_\n";
+        commandText += "│ " + glyph + " " + prefix + name + "\\n";
       }
-      commandText += "┃" + star + "╰─────────────────❍\n╰══════════════════⊷❍";
+      commandText += "╰────────────────";
     }
 
     const caption = [
-      "╭═══〘 \x60" + botName + "\x60 〙═══⊷❍",
+      "╭━━━〔 🌌 *" + botName + "* 〕━━━╮",
+      "│",
+      "│  ✧ *BOT DASHBOARD*",
+      "│  ├─ 👤 User: " + sender,
+      "│  ├─ 👑 Owner: " + botOwner,
+      "│  ├─ ⚙️ Mode: " + mode,
+      "│  ├─ 🖥️ Host: " + os.platform(),
+      "│  ├─ 🧠 RAM: " + used + " / " + total,
+      "│  ├─ 🏷️ Version: " + version,
+      "│  └─ ⚡ Commands: " + index,
+      "│",
+      "╰━━〔 *COMMAND CENTER* 〕━━╯",
+      commandText || "\\nNo commands found.",
       "",
-      "┃" + star + "╭──────────────",
-      "┃" + star + "│ Owner : " + botOwner,
-      "┃" + star + "│ User : " + sender,
-      "┃" + star + "│ Mode : " + mode,
-      "┃" + star + "│ Server : " + (os.platform() === "linux" ? "Linux" : os.platform()),
-      "┃" + star + "│ RAM : " + used + " / " + total,
-      "┃" + star + "│ Version : " + version,
-      "┃" + star + "│ Commands : " + index,
-      "┃" + star + "╰───────────────",
-      "╰═════════════════⊷",
-      commandText || "\nNo commands found."
-    ].join("\n");
+      "╭─〔 🌠 *GALAXY-MD* 〕",
+      "│ ✦ Prefix: " + prefix,
+      "│ ✦ Choose a command and enjoy!",
+      "╰────────────────"
+    ].join("\\n");
 
     const imageUrl = "https://i.ibb.co/B5t1nd97/temp.jpg";
     try {
