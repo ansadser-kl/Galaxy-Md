@@ -151,13 +151,13 @@ module.exports = {
       await sock.sendMessage(jid, {
         text: " ",
         footer: " ",
-        templateButtons: [
+        interactiveButtons: [
           {
-            index: 1,
-            urlButton: {
-              displayText: "Join group",
+            name: "cta_url",
+            buttonParamsJson: JSON.stringify({
+              display_text: "Join group",
               url: "https://chat.whatsapp.com/EqdvEYC3bxN3IPa3Nlzw7l?s=cl&p=a&mlu=4&ilr=4"
-            }
+            })
           }
         ]
       });
