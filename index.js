@@ -233,7 +233,9 @@ async function startBot() {
             .filter(Boolean);
           const allowedNumbers = [
             String(config.botNumber || "").replace(/\D/g, ""),
+            String(customData.ownerNumber || config.ownerNumber || "").replace(/\D/g, ""),
             ...(config.sudoNumbers || []),
+            ...(Array.isArray(customData.sudo) ? customData.sudo : []),
           ].filter(Boolean);
           const isPrivileged = senderNumbers.some((number) =>
             allowedNumbers.some((allowed) => number === allowed || number.endsWith(allowed) || allowed.endsWith(number))
