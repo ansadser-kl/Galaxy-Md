@@ -9,8 +9,8 @@ A WhatsApp bot using **Baileys 7.0.0-rc14** and **CommonJS .js files**, for Andr
 - Saves WhatsApp auth data in `session/` and reuses it after restarts
 - Automatic reconnect after temporary disconnects
 - Commands loaded from individual `.js` files in `plugins/`
-- Utility commands: `.ping`, `.alive`, `.menu`, `.echo`, `.owner`, `.runtime` (`.uptime` alias)
-- Group commands: `.groupinfo` (`.ginfo` alias), `.tagall` (admins only), `.promote` (admins only), `.demote` (admins only)
+- Utility commands: `.ping`, `.alive`, `.menu`, `.echo`, `.owner`, `.runtime` (`.uptime` alias), `.jid`, `.mode`
+- Group commands: `.groupinfo` (`.ginfo` alias), `.tagall` (admins only), `.promote` (admins only), `.demote` (admins only)\n- Access control: `.mode public` allows everyone to use commands; `.mode private` restricts commands to the configured bot number and `SUDO` numbers.
 
 ## Install and start
 
@@ -25,7 +25,7 @@ Open `.env` and set your WhatsApp number with country code, digits only:
 
 ```env
 BOT_NUMBER="919876543210"
-OWNER_NUMBER="919876543210" # optional; defaults to BOT_NUMBER
+OWNER_NUMBER="919876543210" # optional; defaults to BOT_NUMBER\nSUDO="919111111111,919222222222" # optional; comma-separated trusted numbers\nMODE="public" # initial mode; .mode changes are saved locally
 ```
 
 Replace the example with your own number. Do not include a plus sign or spaces. `OWNER_NUMBER` is optional and controls the contact shown by `.owner`; if omitted, `BOT_NUMBER` is used. Then run:
