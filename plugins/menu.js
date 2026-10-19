@@ -9,7 +9,7 @@ const CATEGORY_ORDER = ["General", "Utility", "Group", "Media", "Owner", "Other"
 function getCategory(plugin) {
   if (plugin.category) return String(plugin.category);
   const name = String(plugin.name || "").toLowerCase();
-  if (["ping", "alive", "menu", "help", "echo", "owner", "creator", "runtime", "uptime"].includes(name)) {
+  if (["ping", "alive", "menu", "help", "echo", "owner", "creator", "runtime", "uptime", "mode"].includes(name)) {
     return ["owner", "creator"].includes(name) ? "Owner" : "Utility";
   }
   if (["kick", "remove", "promote", "demote", "tagall", "everyone", "groupinfo", "ginfo"].includes(name)) return "Group";
