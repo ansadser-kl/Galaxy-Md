@@ -12,21 +12,33 @@ module.exports = {
   description: "Download YouTube videos in 360p",
   category: "Downloader",
   async execute({ sock, jid, message, text, args }) {
-    const input = String(text || args?.join(" ") || "").trim();
-    const url = input.match(/https?:\/\/\S+/i)?.[0]?.replace(/[)>]+$/, "");
+    let input = String(text || args?.join(" ") || "").trim();
+    let url = input.match(/https?:\/\/\S+/i)?.[0]?.replace(/[)>]+$/, "");
 
     if (!url || !/(youtube\.com|youtu\.be)/i.test(url)) {
       return sock.sendMessage(
         jid,
-        { text: "Send a YouTube link with the command.\nExample: .video https://youtu.be/VIDEO_ID" },
+        { text: "Please provide a valid YouTube link!\nExample: .video https://youtube.com/watch?v=xxxxx or https://youtube.com/shorts/xxxxx" },
         { quoted: message }
       );
     }
 
+    if (url.includes("youtube.com/shorts/")) {
+      const shortId = url.match(/youtube\.com\/shorts\/([A-Za-z0-9_-]+)/)?.[1];
+      if (shortId) url = "https://www.youtube.com/watch?v=" + shortId;
+    }
+
     const tempFile = path.join(os.tmpdir(), "galaxy-video-" + Date.now() + "-" + Math.random().toString(16).slice(2) + ".mp4");
+    let statusMessage;
+
+    const editStatus = async (text) => {
+      if (statusMessage?.key) {
+        return sock.sendMessage(jid, { text }, { edit: statusMessage.key });
+      }
+    };
 
     try {
-      await sock.sendMessage(jid, { text: "Downloading..." }, { quoted: message });
+      statusMessage = await sock.sendMessage(jid, { text: "Downloading..." }, { quoted: message });
 
       const response = await fetch("https://api.ytultra.com/ikool/youtube/download", {
         method: "POST",
@@ -60,35 +72,45 @@ module.exports = {
       }
 
       await pipeline(Readable.fromWeb(download.body), fs.createWriteStream(tempFile));
-      const stat = fs.statSync(tempFile);
-      if (!stat.size) throw new Error("The downloaded video is empty.");
+      const stats = fs.statSync(tempFile);
+      if (!stats.size) throw new Error("The downloaded video is empty.");
 
-      await sock.sendMessage(jid, { text: "Sending..." }, { quoted: message });
+      await editStatus("Sending...");
 
-      const file = fs.readFileSync(tempFile);
       const caption = (result.data.title || "YouTube Video") + "\nQuality: 360p";
-      if (stat.size > 180 * 1024 * 1024) {
-        await sock.sendMessage(jid, {
-          document: file,
-          mimetype: "video/mp4",
-          fileName: "galaxy-video-360p.mp4",
-          caption: caption + "\nSent as document because file exceeds 180 MB."
-        }, { quoted: message });
-      } else {
-        await sock.sendMessage(jid, {
-          video: file,
-          mimetype: "video/mp4",
-          fileName: "galaxy-video-360p.mp4",
-          caption
-        }, { quoted: message });
+      const stream = fs.createReadStream(tempFile);
+      try {
+        if (stats.size > 180 * 1024 * 1024) {
+          await sock.sendMessage(jid, {
+            document: stream,
+            mimetype: "video/mp4",
+            fileName: "galaxy-video-360p.mp4",
+            caption: caption + "\nSent as document because file exceeds 180 MB."
+          }, { quoted: message });
+        } else {
+          await sock.sendMessage(jid, {
+            video: stream,
+            mimetype: "video/mp4",
+            fileName: "galaxy-video-360p.mp4",
+            caption
+          }, { quoted: message });
+        }
+      } finally {
+        stream.destroy();
       }
+
+      await editStatus("Download complete!");
     } catch (error) {
       console.error("[GALAXY-MD] Video download failed:", error);
-      await sock.sendMessage(
-        jid,
-        { text: "Video download failed.\n" + String(error?.message || error).slice(0, 250) },
-        { quoted: message }
-      );
+      try {
+        await editStatus("Download failed!\n" + String(error?.message || error).slice(0, 200));
+      } catch {
+        await sock.sendMessage(
+          jid,
+          { text: "Download failed. Please try again." },
+          { quoted: message }
+        );
+      }
     } finally {
       try { fs.unlinkSync(tempFile); } catch {}
     }
