@@ -205,12 +205,12 @@ async function startBot() {
             if (feature("welcome") && !message.key?.fromMe && message.messageStubType === 27) {
               await sock.sendMessage(jid, { text: "👋 Welcome to the group!", mentions: [senderJid].filter(Boolean) }).catch(() => {});
             }
-            if (feature("antilink") && !message.key?.fromMe && !senderIsAdmin && !isPrivileged && /(?:https?:\/\/|www\.|chat\.whatsapp\.com\/|t\.me\/)/i.test(text) && botIsAdmin) {
+            if (feature("antilink") && !message.key?.fromMe && !senderIsAdmin && /(?:https?:\/\/|www\.|chat\.whatsapp\.com\/|t\.me\/)/i.test(text) && botIsAdmin) {
               await sock.sendMessage(jid, { text: "⛔ Links are not allowed here. Removing the message." }).catch(() => {});
               await sock.sendMessage(jid, { delete: message.key }).catch(() => {});
               continue;
             }
-            if (feature("antiviewonce") && !message.key?.fromMe && !senderIsAdmin && !isPrivileged && (message.message?.viewOnceMessage || message.message?.viewOnceMessageV2 || message.message?.viewOnceMessageV2Extension)) {
+            if (feature("antiviewonce") && !message.key?.fromMe && !senderIsAdmin && (message.message?.viewOnceMessage || message.message?.viewOnceMessageV2 || message.message?.viewOnceMessageV2Extension)) {
               await sock.sendMessage(jid, { text: "⛔ View-once media is disabled in this group." }).catch(() => {});
               if (botIsAdmin) await sock.sendMessage(jid, { delete: message.key }).catch(() => {});
               continue;
