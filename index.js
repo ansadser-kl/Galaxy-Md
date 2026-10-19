@@ -186,6 +186,41 @@ async function startBot() {
           if (!jid || jid === "status@broadcast") continue;
 
           const text = getMessageText(message);
+          const dataFile = path.join(__dirname, "galaxy-data.json");
+          let data = {};
+          try { data = JSON.parse(fs.readFileSync(dataFile, "utf8")); } catch {}
+
+          // Group automation and moderation are handled for ordinary messages too.
+          if (jid.endsWith("@g.us")) {
+            const feature = (name) => data.features?.[jid + ":" + name] === true;
+            const senderJid = message.key?.participant || message.key?.participantAlt || "";
+            const senderNumber = String(senderJid).split("@")[0].split(":")[0].replace(/\D/g, "");
+            const botNumber = String(config.botNumber || sock.user?.id || "").split("@")[0].split(":")[0].replace(/\D/g, "");
+            const metadata = await sock.groupMetadata(jid).catch(() => null);
+            const participant = metadata?.participants?.find(p => p.id === senderJid || p.lid === senderJid || String(p.id || "").split(":")[0] === String(senderJid).split(":")[0]);
+            const senderIsAdmin = !!(participant?.admin || participant?.superadmin);
+            const botParticipant = metadata?.participants?.find(p => p.id === sock.user?.id || p.lid === sock.user?.lid || String(p.id || "").split(":")[0] === botNumber);
+            const botIsAdmin = !!(botParticipant?.admin || botParticipant?.superadmin);
+
+            if (feature("welcome") && !message.key?.fromMe && message.messageStubType === 27) {
+              await sock.sendMessage(jid, { text: "👋 Welcome to the group!", mentions: [senderJid].filter(Boolean) }).catch(() => {});
+            }
+            if (feature("antilink") && !message.key?.fromMe && !senderIsAdmin && !isPrivileged && /(?:https?:\/\/|www\.|chat\.whatsapp\.com\/|t\.me\/)/i.test(text) && botIsAdmin) {
+              await sock.sendMessage(jid, { text: "⛔ Links are not allowed here. Removing the message." }).catch(() => {});
+              await sock.sendMessage(jid, { delete: message.key }).catch(() => {});
+              continue;
+            }
+            if (feature("antiviewonce") && !message.key?.fromMe && !senderIsAdmin && !isPrivileged && (message.message?.viewOnceMessage || message.message?.viewOnceMessageV2 || message.message?.viewOnceMessageV2Extension)) {
+              await sock.sendMessage(jid, { text: "⛔ View-once media is disabled in this group." }).catch(() => {});
+              if (botIsAdmin) await sock.sendMessage(jid, { delete: message.key }).catch(() => {});
+              continue;
+            }
+            if (feature("autoreply") && !message.key?.fromMe && text && !text.startsWith(config.prefix)) {
+              const answer = data.autoReplyText?.[jid] || "Thanks for your message!";
+              await sock.sendMessage(jid, { text: answer }, { quoted: message }).catch(() => {});
+            }
+          }
+
           if (!text.startsWith(config.prefix)) continue;
 
           const senderIds = [
@@ -213,6 +248,15 @@ async function startBot() {
           const [commandRaw, ...args] = input.split(/\s+/);
           const command = commandRaw.toLowerCase();
           const query = args.join(" ");
+
+          // Simple custom text commands saved by .setcmd name|response.
+          let customData = {};
+          try { customData = JSON.parse(fs.readFileSync(path.join(__dirname, "galaxy-data.json"), "utf8")); } catch {}
+          const customReply = customData.customCommands?.[command];
+          if (typeof customReply === "string") {
+            await sock.sendMessage(jid, { text: customReply }, { quoted: message });
+            continue;
+          }
 
           const plugin = plugins.find((item) =>
             item.name.toLowerCase() === command ||
