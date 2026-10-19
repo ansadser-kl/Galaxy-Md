@@ -172,6 +172,25 @@ async function startBot() {
           const text = getMessageText(message);
           if (!text.startsWith(config.prefix)) continue;
 
+          const senderIds = [
+            message.key?.participant,
+            message.key?.participantAlt,
+            message.key?.remoteJid,
+          ].filter(Boolean);
+          const senderNumbers = senderIds
+            .map((id) => String(id).split("@")[0].split(":")[0].replace(/\\D/g, ""))
+            .filter(Boolean);
+          const allowedNumbers = [
+            String(config.botNumber || "").replace(/\\D/g, ""),
+            ...(config.sudoNumbers || []),
+          ].filter(Boolean);
+          const isPrivileged = senderNumbers.some((number) =>
+            allowedNumbers.some((allowed) => number === allowed || number.endsWith(allowed) || allowed.endsWith(number))
+          );
+
+          // Private mode: only the configured bot number and SUDO numbers may run commands.
+          if (config.mode === "private" && !isPrivileged) continue;
+
           const input = text.slice(config.prefix.length).trim();
           if (!input) continue;
 
@@ -197,6 +216,8 @@ async function startBot() {
             command,
             config,
             plugins,
+            isPrivileged,
+            setMode: (mode) => { config.mode = mode; },
           });
         } catch (error) {
           console.error("[GALAXY-MD] Message handler error:", error.message || error);
