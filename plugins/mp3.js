@@ -5,8 +5,7 @@ const path = require("path");
 const { execFile } = require("child_process");
 const { promisify } = require("util");
 const { downloadMediaMessage } = require("baileys");
-let ffmpegPath = "ffmpeg";
-try { ffmpegPath = require("ffmpeg-static") || "ffmpeg"; } catch {}
+const ffmpegPath = "ffmpeg";
 const execFileAsync = promisify(execFile);
 module.exports = {
   name: "mp3",
