@@ -26,7 +26,7 @@ module.exports = {
     const tempFile = path.join(os.tmpdir(), "galaxy-video-" + Date.now() + "-" + Math.random().toString(16).slice(2) + ".mp4");
 
     try {
-      await sock.sendMessage(jid, { text: "Downloading........." }, { quoted: message });
+      await sock.sendMessage(jid, { text: "Downloading..." }, { quoted: message });
 
       const response = await fetch("https://api.ytultra.com/ikool/youtube/download", {
         method: "POST",
@@ -63,7 +63,7 @@ module.exports = {
       const stat = fs.statSync(tempFile);
       if (!stat.size) throw new Error("The downloaded video is empty.");
 
-      await sock.sendMessage(jid, { text: "Sending....." }, { quoted: message });
+      await sock.sendMessage(jid, { text: "Sending..." }, { quoted: message });
 
       const file = fs.readFileSync(tempFile);
       const caption = (result.data.title || "YouTube Video") + "\nQuality: 360p";
