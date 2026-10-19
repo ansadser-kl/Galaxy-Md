@@ -33,7 +33,7 @@ module.exports = {
 
     const editStatus = async (text) => {
       if (statusMessage?.key) {
-        return sock.sendMessage(jid, { text }, { edit: statusMessage.key });
+        return sock.sendMessage(jid, { text, edit: statusMessage.key });
       }
     };
 
