@@ -178,10 +178,10 @@ async function startBot() {
             message.key?.remoteJid,
           ].filter(Boolean);
           const senderNumbers = senderIds
-            .map((id) => String(id).split("@")[0].split(":")[0].replace(/\\D/g, ""))
+            .map((id) => String(id).split("@")[0].split(":")[0].replace(/\D/g, ""))
             .filter(Boolean);
           const allowedNumbers = [
-            String(config.botNumber || "").replace(/\\D/g, ""),
+            String(config.botNumber || "").replace(/\D/g, ""),
             ...(config.sudoNumbers || []),
           ].filter(Boolean);
           const isPrivileged = senderNumbers.some((number) =>
