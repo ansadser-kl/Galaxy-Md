@@ -2,5 +2,6 @@ node_modules/
 session/
 .env
 mode.json
+galaxy-data.json
 *.log
 .DS_Store
