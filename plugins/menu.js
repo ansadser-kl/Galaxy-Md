@@ -46,7 +46,7 @@ module.exports = {
     const total = bytesToSize(os.totalmem());
     const version = String(config.version || "1.0.0");
     const sender = String(message.pushName || message.senderName || "User")
-      .replace(/[\\r\\n]+/g, "").slice(0, 60);
+      .replace(/[\\r\n]+/g, "").slice(0, 60);
 
     const groups = new Map();
     for (const plugin of plugins || []) {
@@ -61,10 +61,10 @@ module.exports = {
     let commandText = "";
     for (const [category, names] of groups) {
       const uniqueNames = [...new Set(names)].sort((a, b) => a.localeCompare(b));
-      commandText += "\\n\\n╭─『 *" + category.toUpperCase() + "* 』\n";
+      commandText += "\n\n╭─『 *" + category.toUpperCase() + "* 』\n";
       for (const name of uniqueNames) {
         index++;
-        commandText += "│ " + glyph + " " + prefix + name + "\\n";
+        commandText += "│ " + glyph + " " + prefix + name + "\n";
       }
       commandText += "╰────────────────";
     }
@@ -82,13 +82,13 @@ module.exports = {
       "│  └─ ⚡ Commands: " + index,
       "│",
       "╰━━〔 *COMMAND CENTER* 〕━━╯",
-      commandText || "\\nNo commands found.",
+      commandText || "\nNo commands found.",
       "",
       "╭─〔 🌠 *GALAXY-MD* 〕",
       "│ ✦ Prefix: " + prefix,
       "│ ✦ Choose a command and enjoy!",
       "╰────────────────"
-    ].join("\\n");
+    ].join("\n");
 
     const imageUrl = "https://i.ibb.co/B5t1nd97/temp.jpg";
     try {
