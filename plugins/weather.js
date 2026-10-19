@@ -1,7 +1,7 @@
 "use strict";
 module.exports = {
   name: "weather",
-  aliases: ["wt"],
+  aliases: [],
   description: "Get current weather for a city",
   category: "Utility",
   async execute({ sock, jid, message, query }) {
