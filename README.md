@@ -9,7 +9,7 @@ A WhatsApp bot using **Baileys 7.0.0-rc14** and **CommonJS .js files**, for Andr
 - Saves WhatsApp auth data in `session/` and reuses it after restarts
 - Automatic reconnect after temporary disconnects
 - Commands loaded from individual `.js` files in `plugins/`
-- Built-in commands: `.ping`, `.alive`, `.menu`, `.echo`
+- Utility commands: `.ping`, `.alive`, `.menu`, `.echo`, `.owner`, `.runtime` (`.uptime` alias)
 
 ## Install and start
 
@@ -24,9 +24,10 @@ Open `.env` and set your WhatsApp number with country code, digits only:
 
 ```env
 BOT_NUMBER="919876543210"
+OWNER_NUMBER="919876543210" # optional; defaults to BOT_NUMBER
 ```
 
-Replace the example with your own number. Do not include a plus sign or spaces. Then run:
+Replace the example with your own number. Do not include a plus sign or spaces. `OWNER_NUMBER` is optional and controls the contact shown by `.owner`; if omitted, `BOT_NUMBER` is used. Then run:
 
 ```bash
 npm start
