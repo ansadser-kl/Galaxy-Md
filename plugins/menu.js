@@ -5,6 +5,8 @@ const path = require("path");
 const config = require("../config");
 
 const CATEGORY_ORDER = ["General", "Utility", "Group", "Media", "Owner", "Other"];
+let cachedImage = null;
+let imageChecked = false;
 
 function getCategory(plugin) {
   if (plugin.category) return String(plugin.category);
@@ -56,17 +58,26 @@ module.exports = {
 
     lines.push("🌠 *GALAXY-MD* • Powered by plugins");
     const caption = lines.join("\n").trim();
-    const imagePath = path.join(__dirname, "..", "menu.png");
 
-    if (fs.existsSync(imagePath)) {
+    // Read the menu image once and reuse it, instead of reading the file on every .menu.
+    if (!imageChecked) {
+      imageChecked = true;
+      const imagePath = path.join(__dirname, "..", "menu.png");
       try {
-        await sock.sendMessage(jid, { image: fs.readFileSync(imagePath), caption }, { quoted: message });
+        if (fs.existsSync(imagePath)) cachedImage = fs.readFileSync(imagePath);
+        else console.error(`[GALAXY-MD] Menu image not found at: ${imagePath}`);
+      } catch (error) {
+        console.error("[GALAXY-MD] Menu image read failed:", error.message || error);
+      }
+    }
+
+    if (cachedImage) {
+      try {
+        await sock.sendMessage(jid, { image: cachedImage, caption }, { quoted: message });
         return;
       } catch (error) {
         console.error("[GALAXY-MD] Menu image send failed:", error.message || error);
       }
-    } else {
-      console.error(`[GALAXY-MD] Menu image not found at: ${imagePath}`);
     }
 
     await sock.sendMessage(jid, { text: caption }, { quoted: message });
