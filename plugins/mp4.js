@@ -5,6 +5,7 @@ const path = require("path");
 const { execFile } = require("child_process");
 const { promisify } = require("util");
 const { downloadMediaMessage } = require("baileys");
+const ffmpegPath = require("ffmpeg-static") || "ffmpeg";
 const execFileAsync = promisify(execFile);
 module.exports = {
   name: "mp4",
@@ -24,9 +25,9 @@ module.exports = {
     try {
       fs.writeFileSync(input, await downloadMediaMessage(source, "buffer", {}));
       if (sticker) {
-        await execFileAsync("ffmpeg", ["-y", "-i", input, "-movflags", "faststart", "-pix_fmt", "yuv420p", output], { timeout: 120000 });
+        await execFileAsync(ffmpegPath, ["-y", "-i", input, "-movflags", "faststart", "-pix_fmt", "yuv420p", output], { timeout: 120000 });
       } else {
-        await execFileAsync("ffmpeg", ["-y", "-f", "lavfi", "-i", "color=c=black:s=720x720:r=25", "-i", input, "-shortest", "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p", output], { timeout: 120000 });
+        await execFileAsync(ffmpegPath, ["-y", "-f", "lavfi", "-i", "color=c=black:s=720x720:r=25", "-i", input, "-shortest", "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p", output], { timeout: 120000 });
       }
       await sock.sendMessage(jid, { video: fs.readFileSync(output), caption: "Converted by GALAXY-MD" }, { quoted: message });
     } catch (e) {
