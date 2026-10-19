@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const config = require("../config");
 
 const CATEGORY_ORDER = ["General", "Utility", "Group", "Media", "Owner", "Other"];
@@ -13,17 +14,31 @@ let imageChecked = false;
 function getCategory(plugin) {
   if (plugin.category) return String(plugin.category);
   const name = String(plugin.name || "").toLowerCase();
-  if (["ping", "alive", "menu", "help", "echo", "owner", "creator", "runtime", "uptime", "mode"].includes(name)) {
-    return ["owner", "creator"].includes(name) ? "Owner" : "Utility";
-  }
+  if (["owner", "creator"].includes(name)) return "Owner";
   if (["kick", "remove", "promote", "demote", "tagall", "everyone", "groupinfo", "ginfo"].includes(name)) return "Group";
   if (["play", "yta", "ytv", "sticker", "vv"].includes(name)) return "Media";
+  if (["ping", "alive", "menu", "help", "echo", "runtime", "uptime", "mode"].includes(name)) return "Utility";
   return "Other";
 }
 
-function buildCaption(plugins) {
-  const groups = new Map();
+function bytesToSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "N/A";
+  if (bytes < 1024) return bytes + " B";
+  const units = ["KB", "MB", "GB", "TB"];
+  let size = bytes / 1024;
+  let i = 0;
+  while (size >= 1024 && i < units.length - 1) {
+    size /= 1024;
+    i++;
+  }
+  return size.toFixed(1) + " " + units[i];
+}
+
+function buildCaption(plugins, message) {
+  const stars = ["✦", "✯", "✯", "✰", "◬"];
+  const star = stars[Math.floor(Math.random() * stars.length)];
   const visiblePlugins = plugins.filter((plugin) => !["menu", "help"].includes(String(plugin.name).toLowerCase()));
+  const groups = new Map();
 
   for (const plugin of visiblePlugins) {
     const category = getCategory(plugin);
@@ -35,26 +50,37 @@ function buildCaption(plugins) {
     ...CATEGORY_ORDER.filter((category) => groups.has(category)),
     ...Array.from(groups.keys()).filter((category) => !CATEGORY_ORDER.includes(category)).sort(),
   ];
+
   const lines = [
-    `╭━━━〔 🌌 *${config.botName}* 〕━━━╮`,
-    `┃ ✨ Version: ${config.version}`,
-    `┃ 🔹 Prefix: ${config.prefix}`,
-    `┃ 🧩 Commands: ${visiblePlugins.length}`,
-    `╰━━━━━━━━━━━━━━━━━━━━━━╯`,
+    `╭═══〘 \`${config.botName || "GALAXY-MD"}\` 〙═══⊷❍`,
+    `┃${star}╭──────────────`,
+    `┃${star}│`,
+    `┃${star}│ _*\`Owner\`*_ : ${config.ownerNumber || "N/A"}`,
+    `┃${star}│ _*\`User\`*_ : ${String(message?.pushName || message?.senderName || "User").replace(/[\\r\\n]+/gm, "")}`,
+    `┃${star}│ _*\`Mode\`*_ : ${config.mode || "public"}`,
+    `┃${star}│ _*\`Server\`*_ : ${os.platform() === "linux" ? "Linux" : os.platform()}`,
+    `┃${star}│ _*\`Available RAM\`*_ : ${bytesToSize(os.freemem())} of ${bytesToSize(os.totalmem())}`,
+    `┃${star}│ _*\`Version\`*_ : ${config.version || "1.0.0"}`,
+    `┃${star}│`,
+    `┃${star}│   ${config.botName || "GALAXY-MD"}`,
+    `┃${star}╰───────────────`,
+    `╰═════════════════⊷`,
     "",
   ];
 
+  let i = 0;
   for (const category of categories) {
-    lines.push(`╭━━〔 ✦ *${category.toUpperCase()}* ✦ 〕━━╮`);
-    for (const plugin of groups.get(category).sort((a, b) => a.name.localeCompare(b.name))) {
-      lines.push(`┃ ✧ ${config.prefix}${plugin.name}`);
-      if (plugin.description) lines.push(`┃   └ ${plugin.description}`);
+    lines.push(`╭════〘 *_\`${category}\`_* 〙════⊷❍`);
+    const items = groups.get(category).sort((a, b) => a.name.localeCompare(b.name));
+    for (const plugin of items) {
+      i++;
+      lines.push(`┃${star}│ _\`${i}.\` ${config.prefix}${plugin.name}_`);
     }
-    lines.push("╰━━━━━━━━━━━━━━━━━━━━╯", "");
+    lines.push(`┃${star}╰─────────────────❍`, `╰══════════════════⊷❍`, "");
   }
 
-  lines.push("🌠 *GALAXY-MD* • Powered by plugins");
-  return lines.join("\n").trim();
+  lines.push(`✦ Total Commands: ${visiblePlugins.length}`, "🌌 *Powered by GALAXY-MD*");
+  return lines.join("\\n").trim();
 }
 
 function getMenuImage() {
@@ -75,9 +101,9 @@ module.exports = {
   aliases: ["help"],
   description: "Show available commands by category",
   async execute({ sock, jid, message, plugins }) {
-    const pluginNames = plugins.map((plugin) => `${plugin.name}:${plugin.description || ""}`).join("|");
+    const pluginNames = plugins.map((plugin) => `${plugin.name}:${plugin.description || ""}:${plugin.category || ""}`).join("|");
     if (!cachedCaption || pluginNames !== cachedPluginNames) {
-      cachedCaption = buildCaption(plugins);
+      cachedCaption = buildCaption(plugins, message);
       cachedPluginNames = pluginNames;
     }
 
