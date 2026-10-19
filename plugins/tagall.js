@@ -2,7 +2,7 @@
 
 module.exports = {
   name: "tagall",
-  aliases: ["everyone"],
+  aliases: [],
   description: "Mention all group members in a numbered list (admins only)",
   async execute({ sock, jid, message, query }) {
     if (!jid.endsWith("@g.us")) {
