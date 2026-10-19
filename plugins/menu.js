@@ -99,8 +99,9 @@ function buildCaption(plugins, message, cfg) {
   }
 
   const categories = [
-    ...CATEGORY_ORDER.filter((category) => groups.has(category)),
-    ...Array.from(groups.keys()).filter((category) => !CATEGORY_ORDER.includes(category)).sort(),
+    ...CATEGORY_ORDER.filter((category) => category !== "Media" && groups.has(category)),
+    ...Array.from(groups.keys()).filter((category) => !CATEGORY_ORDER.includes(category) && category !== "Media").sort(),
+    ...(groups.has("Media") ? ["Media"] : []),
   ];
   const user = String(message?.pushName || message?.senderName || "User").replace(/[\r\n]+/g, "");
   const lines = [
@@ -148,19 +149,7 @@ module.exports = {
       const image = await getImage();
       if (!image) throw new Error("Cached menu image is unavailable");
       await sock.sendMessage(jid, { image, caption: cachedCaption }, { quoted: message });
-      await sock.sendMessage(jid, {
-        text: " ",
-        footer: " ",
-        interactiveButtons: [
-          {
-            name: "cta_url",
-            buttonParamsJson: JSON.stringify({
-              display_text: "Join group",
-              url: "https://chat.whatsapp.com/EqdvEYC3bxN3IPa3Nlzw7l?s=cl&p=a&mlu=4&ilr=4"
-            })
-          }
-        ]
-      });
+
     } catch (error) {
       console.error("[GALAXY-MD] Menu image send failed:", error.message || error);
       await sock.sendMessage(jid, { text: cachedCaption }, { quoted: message });
