@@ -125,7 +125,7 @@ function buildCaption(plugins, message, cfg) {
     lines.push("╰────────────", "");
   }
 
-  lines.push(`✦ Commands: ${visible.length}`);
+
   return lines.join("\n").trim();
 }
 
@@ -151,18 +151,15 @@ module.exports = {
         image,
         caption: cachedCaption,
         footer: " ",
-        buttons: [
-          { buttonId: ".alive", buttonText: { displayText: "ALIVE" }, type: 1 },
-          { buttonId: ".ping", buttonText: { displayText: "PING" }, type: 1 },
+        templateButtons: [
           {
-            type: 2,
+            index: 1,
             urlButton: {
-              displayText: "GROUP LINK",
+              displayText: "Join group",
               url: "https://chat.whatsapp.com/EqdvEYC3bxN3IPa3Nlzw7l?s=cl&p=a&mlu=4&ilr=4"
             }
           }
-        ],
-        headerType: 4
+        ]
       }, { quoted: message });
     } catch (error) {
       console.error("[GALAXY-MD] Menu image send failed:", error.message || error);
