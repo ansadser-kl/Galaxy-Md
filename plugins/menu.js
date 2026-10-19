@@ -147,9 +147,9 @@ module.exports = {
     try {
       const image = await getImage();
       if (!image) throw new Error("Cached menu image is unavailable");
+      await sock.sendMessage(jid, { image, caption: cachedCaption }, { quoted: message });
       await sock.sendMessage(jid, {
-        image,
-        caption: cachedCaption,
+        text: " ",
         footer: " ",
         templateButtons: [
           {
@@ -160,7 +160,7 @@ module.exports = {
             }
           }
         ]
-      }, { quoted: message });
+      });
     } catch (error) {
       console.error("[GALAXY-MD] Menu image send failed:", error.message || error);
       await sock.sendMessage(jid, { text: cachedCaption }, { quoted: message });
