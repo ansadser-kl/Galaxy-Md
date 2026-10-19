@@ -52,9 +52,15 @@ module.exports = {
       const buffer = await downloadMediaMessage(source, "buffer", {});
       if (!buffer || !buffer.length) throw new Error("Video download returned empty data.");
       fs.writeFileSync(input, buffer);
+      // Many videos contain no audio track; detect this before conversion.
+      const probe = await execFileAsync("ffmpeg", ["-i", input], { timeout: 30000 }).catch((error) => error);
+      const probeText = String(probe.stderr || probe.message || "");
+      if (!/Audio:/.test(probeText)) {
+        throw new Error("This video has no audio track, so it cannot be converted to MP3. Try a video that has sound.");
+      }
 
       await execFileAsync("ffmpeg", [
-        "-y", "-i", input, "-vn", "-codec:a", "libmp3lame", "-q:a", "4", output
+        "-y", "-i", input, "-vn", "-map", "0:a:0?", "-codec:a", "libmp3lame", "-q:a", "4", output
       ], { timeout: 120000 });
 
       const audio = fs.readFileSync(output);
