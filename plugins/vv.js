@@ -2,7 +2,7 @@
 const { downloadMediaMessage } = require("baileys");
 module.exports = {
   name: "vv",
-  aliases: ["viewonce"],
+  aliases: [],
   description: "Retrieve view-once media when replying to it",
   category: "Media",
   async execute({ sock, jid, message }) {
