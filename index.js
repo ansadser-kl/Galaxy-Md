@@ -14,6 +14,8 @@ const SESSION_DIR = path.join(__dirname, "session");
 const PLUGINS_DIR = path.join(__dirname, "plugins");
 let reconnectTimer = null;
 let starting = false;
+let cachedPlugins = [];
+let cachedPluginSignature = "";
 
 function getMessageText(message) {
   const msg = message && message.message;
@@ -33,9 +35,23 @@ function getMessageText(message) {
 
 function loadPlugins() {
   fs.mkdirSync(PLUGINS_DIR, { recursive: true });
-  const plugins = [];
+  const files = fs.readdirSync(PLUGINS_DIR)
+    .filter((name) => name.endsWith(".js"))
+    .sort();
+  const signature = files.map((file) => {
+    try {
+      const stat = fs.statSync(path.join(PLUGINS_DIR, file));
+      return file + ":" + stat.size + ":" + stat.mtimeMs;
+    } catch {
+      return file + ":missing";
+    }
+  }).join("|");
 
-  for (const file of fs.readdirSync(PLUGINS_DIR).filter((name) => name.endsWith(".js")).sort()) {
+  // Avoid re-reading/requiring every plugin for every message.
+  if (signature === cachedPluginSignature) return cachedPlugins;
+
+  const plugins = [];
+  for (const file of files) {
     const fullPath = path.join(PLUGINS_DIR, file);
     try {
       delete require.cache[require.resolve(fullPath)];
@@ -50,7 +66,9 @@ function loadPlugins() {
     }
   }
 
-  return plugins;
+  cachedPluginSignature = signature;
+  cachedPlugins = plugins;
+  return cachedPlugins;
 }
 
 async function startBot() {
@@ -69,11 +87,9 @@ async function startBot() {
       throw new Error("Required Baileys exports are missing. Check the installed Baileys version.");
     }
 
-    // Keep the same local session folder between restarts. Do not delete it on startup.
     fs.mkdirSync(SESSION_DIR, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
 
-    // Only request a new pairing code when this session has not been registered.
     if (!state.creds.registered && !config.botNumber) {
       console.error("[GALAXY-MD] BOT_NUMBER is missing. Add BOT_NUMBER=countrycode+number to your .env file.");
       starting = false;
@@ -102,7 +118,6 @@ async function startBot() {
       syncFullHistory: false,
     });
 
-    // Persist updated credentials/keys so the linked session can be reused after restart.
     sock.ev.on("creds.update", saveCreds);
 
     sock.ev.on("connection.update", async (update) => {
@@ -137,7 +152,6 @@ async function startBot() {
       }
     });
 
-    // Pairing-code login is only used for a fresh/unregistered session.
     if (!state.creds.registered) {
       const number = String(config.botNumber).replace(/\D/g, "");
       if (number.length >= 8) {
@@ -163,6 +177,7 @@ async function startBot() {
       if (type !== "notify") return;
 
       for (const message of messages || []) {
+        const receivedAt = Date.now();
         try {
           if (!message?.message) continue;
 
@@ -175,11 +190,9 @@ async function startBot() {
           const senderIds = [
             message.key?.participant,
             message.key?.participantAlt,
-            ...(
-              message.key?.fromMe
-                ? [sock.user?.id, sock.user?.lid, config.botNumber]
-                : [message.key?.remoteJid]
-            ),
+            ...(message.key?.fromMe
+              ? [sock.user?.id, sock.user?.lid, config.botNumber]
+              : [message.key?.remoteJid]),
           ].filter(Boolean);
           const senderNumbers = senderIds
             .map((id) => String(id).split("@")[0].split(":")[0].replace(/\D/g, ""))
@@ -192,10 +205,7 @@ async function startBot() {
             allowedNumbers.some((allowed) => number === allowed || number.endsWith(allowed) || allowed.endsWith(number))
           );
 
-          // Process commands sent by the bot account itself, but keep ignoring other self-generated messages.
           if (message.key?.fromMe && !isPrivileged) continue;
-
-          // Private mode: only the configured bot number and SUDO numbers may run commands.
           if (config.mode === "private" && !isPrivileged) continue;
 
           const input = text.slice(config.prefix.length).trim();
@@ -205,7 +215,6 @@ async function startBot() {
           const command = commandRaw.toLowerCase();
           const query = args.join(" ");
 
-          // Reload plugins while handling commands, so newly added .js plugins are picked up.
           const plugins = loadPlugins();
           const plugin = plugins.find((item) =>
             item.name.toLowerCase() === command ||
@@ -223,6 +232,7 @@ async function startBot() {
             command,
             config,
             plugins,
+            receivedAt,
             isPrivileged,
             setMode: (mode) => { config.mode = mode; },
           });
