@@ -5,7 +5,7 @@ const config = require("../config");
 module.exports = {
   name: "owner",
   aliases: ["creator"],
-  description: "Show bot owner number only",
+  description: "Send bot owner contact card",
   async execute({ sock, jid, message }) {
     const number = String(config.ownerNumber || "").replace(/\D/g, "");
     if (!number) {
@@ -13,6 +13,18 @@ module.exports = {
       return;
     }
 
-    await sock.sendMessage(jid, { text: number });
+    await sock.sendMessage(
+      jid,
+      {
+        contacts: {
+          displayName: "GALAXY-MD Owner",
+          contacts: [{
+            displayName: "GALAXY-MD Owner",
+            vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:GALAXY-MD Owner\nTEL;type=CELL;type=VOICE;waid=${number}:+${number}\nEND:VCARD`,
+          }],
+        },
+      },
+      { quoted: message }
+    );
   },
 };
