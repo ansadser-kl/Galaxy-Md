@@ -74,16 +74,30 @@ module.exports = {
       commandText += "\n\n╭─『 *" + category.toUpperCase() + "* 』\n";
       for (const name of uniqueNames) {
         index++;
-        commandText += "│ " + prefix + name + "\n";
+        commandText += "│ " + " " + prefix + name + "\n";
       }
       commandText += "╰────────────────";
     }
 
     const caption = [
-      "╭━━〔 *COMMANDS* 〕━━╮",
+      "╭━━━〔 🌌 *" + botName + "* 〕━━━╮",
+      "│",
+      "│  ✧ *BOT DASHBOARD*",
+      "│  ├─ 👤 User: " + sender,
+      "│  ├─ 👑 Owner: " + botOwner,
+      "│  ├─ ⚙️ Mode: " + mode,
+      "│  ├─ 🖥️ Host: " + os.platform(),
+      "│  ├─ 🧠 RAM: " + used + " / " + total,
+      "│  ├─ 🏷️ Version: " + version,
+      "│  └─ ⚡ Commands: " + index,
+      "│",
+      "╰━━〔 *COMMAND CENTER* 〕━━╯",
       commandText || "\nNo commands found.",
       "",
-      "Prefix: " + prefix
+      "╭─〔 🌠 *GALAXY-MD* 〕",
+      "│ ✦ Prefix: " + prefix,
+      "│ ✦ Choose a command and enjoy!",
+      "╰────────────────"
     ].join("\n");
 
     const imageUrl = "https://i.ibb.co/B5t1nd97/temp.jpg";
