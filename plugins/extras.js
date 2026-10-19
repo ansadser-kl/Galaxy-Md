@@ -21,16 +21,15 @@ function getTarget(message) {
 module.exports = {
   name: "info",
   aliases: [
-    "admins", "getjids", "setprefix", "antilink", "antiviewonce",
-    "autoreply", "setcmd", "getcmd",
-    "delcmd", "setvideo", "setimage", "setbot", "setowner", "setsudo", "getsudo",
-    "delsudo", "resetsession", "reboot", "forward", "send", "vn", "url"
+    "admins", "getjids", "setprefix", "antilink",
+    "setvideo", "setimage", "setbot", "setowner", "setsudo", "getsudo",
+    "delsudo", "reboot", "forward", "send", "vn", "url"
   ],
   description: "GALAXY-MD utility, moderation and owner controls",
   async execute({ sock, jid, message, query, command, config, isPrivileged, args, plugins }) {
     const data = readData();
     const reply = (text, extra = {}) => sock.sendMessage(jid, { text, ...extra }, { quoted: message });
-    const ownerOnly = ["setprefix", "setcmd", "getcmd", "delcmd", "setvideo", "setimage", "setbot", "setowner", "setsudo", "getsudo", "delsudo", "resetsession", "reboot"].includes(command);
+    const ownerOnly = ["setprefix", "setvideo", "setimage", "setbot", "setowner", "setsudo", "getsudo", "delsudo", "reboot"].includes(command);
     if (ownerOnly && !isPrivileged) return reply("⛔ Owner/SUDO only.");
 
     if (command === "info") {
@@ -53,7 +52,7 @@ module.exports = {
       data.prefix = p; config.prefix = p; save(data);
       return reply("Prefix changed to: " + p);
     }
-    if (["welcome", "antilink", "antiviewonce", "autoreply"].includes(command)) {
+    if (["welcome", "antilink"].includes(command)) {
       if (!jid.endsWith("@g.us") && command !== "autoreply") return reply("This command works in groups only.");
       if (!isPrivileged) {
         const m = await sock.groupMetadata(jid).catch(() => null);
@@ -67,25 +66,6 @@ module.exports = {
       if (value !== "status") data.features[jid + ":" + command] = value === "on";
       save(data);
       return reply("⚙️ " + command + ": " + (data.features[jid + ":" + command] ? "ON" : "OFF"));
-    }
-    if (command === "setcmd") {
-      const [key, ...body] = String(query || "").split("|");
-      if (!key?.trim() || !body.join("|").trim()) return reply("Usage: .setcmd name|response text");
-      data.customCommands ||= {};
-      data.customCommands[key.trim().toLowerCase()] = body.join("|").trim(); save(data);
-      return reply("✅ Custom command saved: " + key.trim());
-    }
-    if (command === "getcmd") {
-      const key = String(query || "").trim().toLowerCase();
-      data.customCommands ||= {};
-      if (key) return reply(data.customCommands[key] ? key + " → " + data.customCommands[key] : "Custom command not found.");
-      return reply("Custom commands:\n" + (Object.keys(data.customCommands).join(", ") || "None"));
-    }
-    if (command === "delcmd") {
-      const key = String(query || "").trim().toLowerCase();
-      data.customCommands ||= {};
-      if (!data.customCommands[key]) return reply("Custom command not found.");
-      delete data.customCommands[key]; save(data); return reply("🗑️ Deleted: " + key);
     }
     if (command === "setbot") {
       if (!query.trim()) return reply("Usage: .setbot <new bot name>");
@@ -111,7 +91,6 @@ module.exports = {
       if (!/^https?:\/\//i.test(query.trim())) return reply("Please provide a valid http(s) URL.");
       data[command] = query.trim(); save(data); return reply(command + " URL saved.");
     }
-    if (command === "resetsession") return reply("⚠️ For safety, session reset is not available as a chat command. Stop the bot and back up the session folder before resetting it manually.");
     if (command === "reboot") {
       await reply("♻️ Restarting bot process...");
       setTimeout(() => process.exit(0), 1000);
