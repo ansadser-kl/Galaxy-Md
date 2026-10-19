@@ -1,10 +1,14 @@
 "use strict";
 
+const fs = require("fs");
+const path = require("path");
 const config = require("../config");
 
 const CATEGORY_ORDER = ["General", "Utility", "Group", "Media", "Owner", "Other"];
 let cachedCaption = "";
 let cachedPluginNames = "";
+let cachedImage = null;
+let imageChecked = false;
 
 function getCategory(plugin) {
   if (plugin.category) return String(plugin.category);
@@ -53,6 +57,19 @@ function buildCaption(plugins) {
   return lines.join("\n").trim();
 }
 
+function getMenuImage() {
+  if (imageChecked) return cachedImage;
+  imageChecked = true;
+  const imagePath = path.join(__dirname, "..", "menu.png");
+  try {
+    if (fs.existsSync(imagePath)) cachedImage = fs.readFileSync(imagePath);
+    else console.error(`[GALAXY-MD] Menu image not found at: ${imagePath}`);
+  } catch (error) {
+    console.error("[GALAXY-MD] Menu image read failed:", error.message || error);
+  }
+  return cachedImage;
+}
+
 module.exports = {
   name: "menu",
   aliases: ["help"],
@@ -64,7 +81,15 @@ module.exports = {
       cachedPluginNames = pluginNames;
     }
 
-    // Text-only avoids re-uploading menu.png on every command, which can be slow on any host.
+    const image = getMenuImage();
+    if (image) {
+      try {
+        await sock.sendMessage(jid, { image, caption: cachedCaption }, { quoted: message });
+        return;
+      } catch (error) {
+        console.error("[GALAXY-MD] Menu image send failed:", error.message || error);
+      }
+    }
     await sock.sendMessage(jid, { text: cachedCaption }, { quoted: message });
   },
 };
