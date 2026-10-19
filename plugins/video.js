@@ -78,25 +78,20 @@ module.exports = {
       await editStatus("Sending...");
 
       const caption = (result.data.title || "YouTube Video") + "\nQuality: 360p";
-      const stream = fs.createReadStream(tempFile);
-      try {
-        if (stats.size > 180 * 1024 * 1024) {
-          await sock.sendMessage(jid, {
-            document: stream,
-            mimetype: "video/mp4",
-            fileName: "galaxy-video-360p.mp4",
-            caption: caption + "\nSent as document because file exceeds 180 MB."
-          }, { quoted: message });
-        } else {
-          await sock.sendMessage(jid, {
-            video: stream,
-            mimetype: "video/mp4",
-            fileName: "galaxy-video-360p.mp4",
-            caption
-          }, { quoted: message });
-        }
-      } finally {
-        stream.destroy();
+      if (stats.size > 180 * 1024 * 1024) {
+        await sock.sendMessage(jid, {
+          document: { url: tempFile },
+          mimetype: "video/mp4",
+          fileName: "galaxy-video-360p.mp4",
+          caption: caption + "\nSent as document because file exceeds 180 MB."
+        }, { quoted: message });
+      } else {
+        await sock.sendMessage(jid, {
+          video: { url: tempFile },
+          mimetype: "video/mp4",
+          fileName: "galaxy-video-360p.mp4",
+          caption
+        }, { quoted: message });
       }
 
       await editStatus("Download complete!");
