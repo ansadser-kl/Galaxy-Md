@@ -51,12 +51,13 @@ function buildCaption(plugins, message) {
     ...Array.from(groups.keys()).filter((category) => !CATEGORY_ORDER.includes(category)).sort(),
   ];
 
+  const senderName = String(message?.pushName || message?.senderName || "User").replace(/[\r\n]+/g, "");
   const lines = [
     `╭═══〘 \`${config.botName || "GALAXY-MD"}\` 〙═══⊷❍`,
     `┃${star}╭──────────────`,
     `┃${star}│`,
     `┃${star}│ _*\`Owner\`*_ : ${config.ownerNumber || "N/A"}`,
-    `┃${star}│ _*\`User\`*_ : ${String(message?.pushName || message?.senderName || "User").replace(/[\\r\\n]+/gm, "")}`,
+    `┃${star}│ _*\`User\`*_ : ${senderName}`,
     `┃${star}│ _*\`Mode\`*_ : ${config.mode || "public"}`,
     `┃${star}│ _*\`Server\`*_ : ${os.platform() === "linux" ? "Linux" : os.platform()}`,
     `┃${star}│ _*\`Available RAM\`*_ : ${bytesToSize(os.freemem())} of ${bytesToSize(os.totalmem())}`,
@@ -80,7 +81,7 @@ function buildCaption(plugins, message) {
   }
 
   lines.push(`✦ Total Commands: ${visiblePlugins.length}`, "🌌 *Powered by GALAXY-MD*");
-  return lines.join("\\n").trim();
+  return lines.join("\n").trim();
 }
 
 function getMenuImage() {
@@ -110,12 +111,15 @@ module.exports = {
     const image = getMenuImage();
     if (image) {
       try {
-        await sock.sendMessage(jid, { image, caption: cachedCaption }, { quoted: message });
-        return;
+        await sock.sendMessage(jid, {
+          image,
+          caption: `🌌 *${config.botName || "GALAXY-MD"}*\n✨ Version: ${config.version || "1.0.0"}`,
+        }, { quoted: message });
       } catch (error) {
         console.error("[GALAXY-MD] Menu image send failed:", error.message || error);
       }
     }
+
     await sock.sendMessage(jid, { text: cachedCaption }, { quoted: message });
   },
 };
