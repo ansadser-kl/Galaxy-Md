@@ -37,7 +37,7 @@ module.exports = {
       const media = result.data.medias.find(item =>
         item && item.quality === "360p" && !item.locked &&
         typeof item.url === "string" && /^https?:\/\//i.test(item.url) &&
-        /\.mp4(?:[?#]|$)/i.test(item.format || "")
+        /\.mp4/i.test(item.format || "")
       );
 
       if (!media) throw new Error("360p MP4 download is unavailable for this video.");
