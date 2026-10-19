@@ -22,7 +22,7 @@ module.exports = {
   name: "info",
   aliases: [
     "admins", "getjids", "setprefix", "welcome", "antilink", "antiviewonce",
-    "antidelete", "antipromote", "antidemote", "autoreply", "setcmd", "getcmd",
+    "autoreply", "setcmd", "getcmd",
     "delcmd", "setvideo", "setimage", "setbot", "setowner", "setsudo", "getsudo",
     "delsudo", "resetsession", "reboot", "forward", "send", "vn", "url"
   ],
@@ -53,7 +53,7 @@ module.exports = {
       data.prefix = p; save(data);
       return reply("Prefix saved as: " + p + "\nRestart the bot for it to take effect.");
     }
-    if (["welcome", "antilink", "antiviewonce", "antidelete", "antipromote", "antidemote", "autoreply"].includes(command)) {
+    if (["welcome", "antilink", "antiviewonce", "autoreply"].includes(command)) {
       if (!jid.endsWith("@g.us") && command !== "autoreply") return reply("This command works in groups only.");
       if (!isPrivileged) {
         const m = await sock.groupMetadata(jid).catch(() => null);
@@ -137,6 +137,32 @@ module.exports = {
       await sock.sendMessage(n + "@s.whatsapp.net", { text });
       return reply("Text forwarded.");
     }
-    if (command === "vn" || command === "url") return reply(command === "vn" ? "Reply to an audio file with .vn; audio conversion support will be added with the media handlers." : "Send a direct http(s) media URL after .url; URL upload handler is not configured yet.");
+    if (command === "vn") {
+      const context = message.message?.extendedTextMessage?.contextInfo;
+      const quoted = context?.quotedMessage;
+      const audio = quoted?.audioMessage || message.message?.audioMessage;
+      if (!audio) return reply("🎙️ Reply to an MP3/audio file with .vn");
+      const { downloadMediaMessage } = require("baileys");
+      const os = require("os");
+      const { execFile } = require("child_process");
+      const { promisify } = require("util");
+      const execFileAsync = promisify(execFile);
+      const base = path.join(os.tmpdir(), "galaxy-vn-" + Date.now());
+      const input = base + ".audio";
+      const output = base + ".ogg";
+      const source = quoted ? { key: { remoteJid: jid, id: context.stanzaId, participant: context.participant, participantAlt: context.participantAlt }, message: quoted } : message;
+      try {
+        fs.writeFileSync(input, await downloadMediaMessage(source, "buffer", {}));
+        await execFileAsync("ffmpeg", ["-y", "-i", input, "-vn", "-c:a", "libopus", "-b:a", "32k", "-ar", "48000", "-ac", "1", "-f", "ogg", output], { timeout: 120000 });
+        await sock.sendMessage(jid, { audio: fs.readFileSync(output), mimetype: "audio/ogg; codecs=opus", ptt: true }, { quoted: message });
+      } catch (error) {
+        console.error("[GALAXY-MD] Voice note conversion failed:", error.message || error);
+        await reply("❌ Voice note conversion failed. Check FFmpeg is installed (Ubuntu: sudo apt install ffmpeg; Termux: pkg install ffmpeg).");
+      } finally {
+        for (const file of [input, output]) try { fs.unlinkSync(file); } catch {}
+      }
+      return;
+    }
+    if (command === "url") return reply("The .url upload command will be added with the downloader commands, as requested.");
   }
 };
