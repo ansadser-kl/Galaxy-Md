@@ -48,10 +48,22 @@ module.exports = {
     const sender = String(message.pushName || message.senderName || "User")
       .replace(/[\\r\n]+/g, "").slice(0, 60);
 
+    // Commands hidden from the menu at the user's request.
+    const hiddenCommands = new Set([
+      "antiviewonce", "autoreply", "creator", "getmd", "delcmd",
+      "everyone", "groupinfo", "resetsession", "setcmd", "s", "st",
+      "viewonce", "wt"
+    ]);
+    const normalizeCommand = (name) => String(name || "")
+      .toLowerCase()
+      .replace(/[\\s_-]+/g, "");
+
     const groups = new Map();
     for (const plugin of plugins || []) {
       const category = String(plugin.category || plugin.use || "General");
-      const names = commandName(plugin);
+      const names = commandName(plugin).filter(
+        (name) => !hiddenCommands.has(normalizeCommand(name))
+      );
       if (!names.length) continue;
       if (!groups.has(category)) groups.set(category, []);
       groups.get(category).push(...names);
