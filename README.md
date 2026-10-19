@@ -10,6 +10,7 @@ A WhatsApp bot using **Baileys 7.0.0-rc14** and **CommonJS .js files**, for Andr
 - Automatic reconnect after temporary disconnects
 - Commands loaded from individual `.js` files in `plugins/`
 - Utility commands: `.ping`, `.alive`, `.menu`, `.echo`, `.owner`, `.runtime` (`.uptime` alias)
+- Group commands: `.groupinfo` (`.ginfo` alias), `.tagall` (admins only), `.promote` (admins only), `.demote` (admins only)
 
 ## Install and start
 
