@@ -5,7 +5,7 @@ const config = require("../config");
 module.exports = {
   name: "owner",
   aliases: ["creator"],
-  description: "Show bot owner number",
+  description: "Show bot owner number only",
   async execute({ sock, jid, message }) {
     const number = String(config.ownerNumber || "").replace(/\D/g, "");
     if (!number) {
@@ -13,6 +13,6 @@ module.exports = {
       return;
     }
 
-    await sock.sendMessage(jid, { text: number }, { quoted: message });
+    await sock.sendMessage(jid, { text: number });
   },
 };
