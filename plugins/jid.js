@@ -3,22 +3,9 @@
 module.exports = {
   name: "jid",
   aliases: [],
-  description: "Show chat JID and your participant/LID ID",
+  description: "Show the current chat JID",
   async execute({ sock, jid, message }) {
     const chatJid = jid || message?.key?.remoteJid || "Unavailable";
-    const participantId =
-      message?.key?.participant ||
-      message?.key?.participantAlt ||
-      message?.key?.remoteJid ||
-      "Unavailable";
-
-    const text = [
-      "╭━━━〔 🌌 *GALAXY-MD JID* 〕━━━╮",
-      `┃ 💬 *Chat JID:* ${chatJid}`,
-      `┃ 👤 *Your LID / Participant ID:* ${participantId}`,
-      "╰━━━━━━━━━━━━━━━━━━━━╯",
-    ].join("\n");
-
-    await sock.sendMessage(chatJid, { text }, { quoted: message });
+    await sock.sendMessage(chatJid, { text: chatJid }, { quoted: message });
   },
 };
