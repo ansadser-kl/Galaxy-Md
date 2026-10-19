@@ -125,7 +125,7 @@ function buildCaption(plugins, message, cfg) {
     lines.push("╰────────────", "");
   }
 
-  lines.push(`✦ Commands: ${visible.length}`, "🌌 *Powered by GALAXY-MD*");
+  lines.push(`✦ Commands: ${visible.length}`);
   return lines.join("\n").trim();
 }
 
@@ -147,7 +147,23 @@ module.exports = {
     try {
       const image = await getImage();
       if (!image) throw new Error("Cached menu image is unavailable");
-      await sock.sendMessage(jid, { image, caption: cachedCaption }, { quoted: message });
+      await sock.sendMessage(jid, {
+        image,
+        caption: cachedCaption,
+        footer: " ",
+        buttons: [
+          { buttonId: ".alive", buttonText: { displayText: "ALIVE" }, type: 1 },
+          { buttonId: ".ping", buttonText: { displayText: "PING" }, type: 1 },
+          {
+            type: 2,
+            urlButton: {
+              displayText: "GROUP LINK",
+              url: "https://chat.whatsapp.com/EqdvEYC3bxN3IPa3Nlzw7l?s=cl&p=a&mlu=4&ilr=4"
+            }
+          }
+        ],
+        headerType: 4
+      }, { quoted: message });
     } catch (error) {
       console.error("[GALAXY-MD] Menu image send failed:", error.message || error);
       await sock.sendMessage(jid, { text: cachedCaption }, { quoted: message });
