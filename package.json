@@ -6,11 +6,17 @@
   "scripts": {
     "start": "node index.js"
   },
-  "keywords": ["whatsapp", "bot", "baileys", "galaxy-md"],
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "baileys",
+    "galaxy-md"
+  ],
   "license": "MIT",
   "dependencies": {
     "baileys": "7.0.0-rc14",
     "dotenv": "^16.4.7",
-    "pino": "^9.6.0"
+    "pino": "^9.6.0",
+    "sharp": "^0.34.2"
   }
 }
