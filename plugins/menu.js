@@ -35,8 +35,6 @@ module.exports = {
   aliases: ["help", "commands"],
   description: "Shows the Galaxy-MD command menu with an image.",
   async execute({ sock, jid, message, config, plugins }) {
-    const glyphs = ["✦", "✧", "✶", "✷", "⟡"];
-    const glyph = glyphs[Math.floor(Math.random() * glyphs.length)];
     const data = readData();
     const prefix = String(data.prefix || config.prefix || ".");
     const botName = String(data.botName || config.botName || "GALAXY-MD");
@@ -76,30 +74,16 @@ module.exports = {
       commandText += "\n\n╭─『 *" + category.toUpperCase() + "* 』\n";
       for (const name of uniqueNames) {
         index++;
-        commandText += "│ " + glyph + " " + prefix + name + "\n";
+        commandText += "│ " + prefix + name + "\n";
       }
       commandText += "╰────────────────";
     }
 
     const caption = [
-      "╭━━━〔 🌌 *" + botName + "* 〕━━━╮",
-      "│",
-      "│  ✧ *BOT DASHBOARD*",
-      "│  ├─ 👤 User: " + sender,
-      "│  ├─ 👑 Owner: " + botOwner,
-      "│  ├─ ⚙️ Mode: " + mode,
-      "│  ├─ 🖥️ Host: " + os.platform(),
-      "│  ├─ 🧠 RAM: " + used + " / " + total,
-      "│  ├─ 🏷️ Version: " + version,
-      "│  └─ ⚡ Commands: " + index,
-      "│",
-      "╰━━〔 *COMMAND CENTER* 〕━━╯",
+      "╭━━〔 *COMMANDS* 〕━━╮",
       commandText || "\nNo commands found.",
       "",
-      "╭─〔 🌠 *GALAXY-MD* 〕",
-      "│ ✦ Prefix: " + prefix,
-      "│ ✦ Choose a command and enjoy!",
-      "╰────────────────"
+      "Prefix: " + prefix
     ].join("\n");
 
     const imageUrl = "https://i.ibb.co/B5t1nd97/temp.jpg";
