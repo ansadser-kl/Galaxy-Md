@@ -164,7 +164,7 @@ async function startBot() {
 
       for (const message of messages || []) {
         try {
-          if (!message?.message || message.key?.fromMe) continue;
+          if (!message?.message) continue;
 
           const jid = message.key?.remoteJid;
           if (!jid || jid === "status@broadcast") continue;
@@ -175,7 +175,11 @@ async function startBot() {
           const senderIds = [
             message.key?.participant,
             message.key?.participantAlt,
-            message.key?.remoteJid,
+            ...(
+              message.key?.fromMe
+                ? [sock.user?.id, sock.user?.lid, config.botNumber]
+                : [message.key?.remoteJid]
+            ),
           ].filter(Boolean);
           const senderNumbers = senderIds
             .map((id) => String(id).split("@")[0].split(":")[0].replace(/\D/g, ""))
@@ -187,6 +191,9 @@ async function startBot() {
           const isPrivileged = senderNumbers.some((number) =>
             allowedNumbers.some((allowed) => number === allowed || number.endsWith(allowed) || allowed.endsWith(number))
           );
+
+          // Process commands sent by the bot account itself, but keep ignoring other self-generated messages.
+          if (message.key?.fromMe && !isPrivileged) continue;
 
           // Private mode: only the configured bot number and SUDO numbers may run commands.
           if (config.mode === "private" && !isPrivileged) continue;
