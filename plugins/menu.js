@@ -1,15 +1,10 @@
 "use strict";
 
-const fs = require("fs");
-const path = require("path");
 const os = require("os");
 const config = require("../config");
 
+const MENU_IMAGE_URL = "https://i.ibb.co/chSg1dRQ/temp.jpg";
 const CATEGORY_ORDER = ["General", "Utility", "Group", "Media", "Owner", "Other"];
-let cachedCaption = "";
-let cachedPluginNames = "";
-let cachedImage = null;
-let imageChecked = false;
 
 function getCategory(plugin) {
   if (plugin.category) return String(plugin.category);
@@ -78,40 +73,22 @@ function buildCaption(plugins, message) {
   return lines.join("\n").trim();
 }
 
-function getMenuImage() {
-  if (imageChecked) return cachedImage;
-  imageChecked = true;
-  const imagePath = path.join(__dirname, "..", "menu.png");
-  try {
-    if (fs.existsSync(imagePath)) cachedImage = fs.readFileSync(imagePath);
-    else console.error(`[GALAXY-MD] Menu image not found at: ${imagePath}`);
-  } catch (error) {
-    console.error("[GALAXY-MD] Menu image read failed:", error.message || error);
-  }
-  return cachedImage;
-}
-
 module.exports = {
   name: "menu",
   aliases: ["help"],
   description: "Show available commands by category",
   async execute({ sock, jid, message, plugins }) {
-    const pluginNames = plugins.map((p) => `${p.name}:${p.description || ""}:${p.category || ""}`).join("|");
-    if (!cachedCaption || pluginNames !== cachedPluginNames) {
-      cachedCaption = buildCaption(plugins, message);
-      cachedPluginNames = pluginNames;
-    }
+    const caption = buildCaption(plugins, message);
 
-    const image = getMenuImage();
-    if (image) {
-      try {
-        await sock.sendMessage(jid, { image, caption: cachedCaption }, { quoted: message });
-        return;
-      } catch (error) {
-        console.error("[GALAXY-MD] Menu image send failed:", error.message || error);
-      }
+    try {
+      await sock.sendMessage(
+        jid,
+        { image: { url: MENU_IMAGE_URL }, caption },
+        { quoted: message }
+      );
+    } catch (error) {
+      console.error("[GALAXY-MD] Menu image send failed:", error.message || error);
+      await sock.sendMessage(jid, { text: caption }, { quoted: message });
     }
-
-    await sock.sendMessage(jid, { text: cachedCaption }, { quoted: message });
   },
 };
