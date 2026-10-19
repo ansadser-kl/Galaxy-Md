@@ -3,9 +3,8 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { execFile } = require("child_process");
-const { promisify } = require("util");
-const execFileAsync = promisify(execFile);
+const { Readable } = require("stream");
+const { pipeline } = require("stream/promises");
 
 module.exports = {
   name: "video",
@@ -24,8 +23,10 @@ module.exports = {
       );
     }
 
+    const tempFile = path.join(os.tmpdir(), "galaxy-video-" + Date.now() + "-" + Math.random().toString(16).slice(2) + ".mp4");
+
     try {
-      await sock.sendMessage(jid, { text: "Getting 360p video..." }, { quoted: message });
+      await sock.sendMessage(jid, { text: "Downloading........." }, { quoted: message });
 
       const response = await fetch("https://api.ytultra.com/ikool/youtube/download", {
         method: "POST",
@@ -51,41 +52,35 @@ module.exports = {
 
       const download = await fetch(media.url, {
         headers: { "User-Agent": "Mozilla/5.0" },
-        signal: AbortSignal.timeout(180000)
+        signal: AbortSignal.timeout(300000)
       });
 
-      if (!download.ok) throw new Error("Video download failed (HTTP " + download.status + ").");
-      const buffer = Buffer.from(await download.arrayBuffer());
-      if (!buffer.length) throw new Error("The downloaded video is empty.");
+      if (!download.ok || !download.body) {
+        throw new Error("Video download failed (HTTP " + download.status + ").");
+      }
 
-      const input = path.join(os.tmpdir(), "galaxy-video-" + Date.now() + ".mp4");
-      const output = input.replace(/\.mp4$/, "-compressed.mp4");
-      try {
-        fs.writeFileSync(input, buffer);
-        await sock.sendMessage(jid, { text: "Compressing 360p video for WhatsApp..." }, { quoted: message });
-        await execFileAsync("ffmpeg", [
-          "-y", "-i", input, "-vf", "scale=-2:360", "-c:v", "libx264",
-          "-preset", "veryfast", "-b:v", "650k", "-maxrate", "800k",
-          "-bufsize", "1300k", "-c:a", "aac", "-b:a", "96k",
-          "-movflags", "+faststart", output
-        ], { timeout: 300000 });
+      await pipeline(Readable.fromWeb(download.body), fs.createWriteStream(tempFile));
+      const stat = fs.statSync(tempFile);
+      if (!stat.size) throw new Error("The downloaded video is empty.");
 
-        const compressed = fs.readFileSync(output);
-        if (!compressed.length) throw new Error("FFmpeg produced an empty video.");
-        if (compressed.length > 64 * 1024 * 1024) {
-          throw new Error("Compressed video is still too large for WhatsApp.");
-        }
+      await sock.sendMessage(jid, { text: "Sending....." }, { quoted: message });
 
+      const file = fs.readFileSync(tempFile);
+      const caption = (result.data.title || "YouTube Video") + "\nQuality: 360p";
+      if (stat.size > 180 * 1024 * 1024) {
         await sock.sendMessage(jid, {
-          video: compressed,
+          document: file,
           mimetype: "video/mp4",
           fileName: "galaxy-video-360p.mp4",
-          caption: (result.data.title || "YouTube Video") + "\nQuality: 360p (compressed)"
+          caption: caption + "\nSent as document because file exceeds 180 MB."
         }, { quoted: message });
-      } finally {
-        for (const file of [input, output]) {
-          try { fs.unlinkSync(file); } catch {}
-        }
+      } else {
+        await sock.sendMessage(jid, {
+          video: file,
+          mimetype: "video/mp4",
+          fileName: "galaxy-video-360p.mp4",
+          caption
+        }, { quoted: message });
       }
     } catch (error) {
       console.error("[GALAXY-MD] Video download failed:", error);
@@ -94,6 +89,8 @@ module.exports = {
         { text: "Video download failed.\n" + String(error?.message || error).slice(0, 250) },
         { quoted: message }
       );
+    } finally {
+      try { fs.unlinkSync(tempFile); } catch {}
     }
   }
 };
