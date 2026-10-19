@@ -5,45 +5,37 @@ module.exports = {
   aliases: [],
   description: "Demote a group admin",
   async execute({ sock, jid, message }) {
-    if (!jid.endsWith("@g.us")) {
-      await sock.sendMessage(jid, { text: "❌ This command works in groups only." }, { quoted: message });
-      return;
-    }
+    const send = (text) => sock.sendMessage(jid, { text }, { quoted: message });
+    if (!jid.endsWith("@g.us")) return send("❌ This command works in groups only.");
 
-    const metadata = await sock.groupMetadata(jid);
-    const sender = message.key?.participant || message.key?.remoteJid;
-    const senderInfo = metadata.participants.find((p) => p.id === sender);
-    const botNumber = sock.user?.id?.split(":")[0];
-    const botInfo = metadata.participants.find((p) => p.id === sock.user?.id || p.id?.startsWith(botNumber + ":"));
-    if (senderInfo?.admin !== "admin" && senderInfo?.admin !== "superadmin") {
-      await sock.sendMessage(jid, { text: "❌ Only group admins can use this command." }, { quoted: message });
-      return;
-    }
-    if (botInfo?.admin !== "admin" && botInfo?.admin !== "superadmin") {
-      await sock.sendMessage(jid, { text: "❌ Make the bot a group admin first." }, { quoted: message });
-      return;
-    }
+    try {
+      const metadata = await sock.groupMetadata(jid);
+      const sameJid = (a, b) => !!a && !!b && (
+        a === b ||
+        String(a).split("@")[0].split(":")[0] === String(b).split("@")[0].split(":")[0]
+      );
+      const sender = message.key?.participant || message.key?.participantAlt || message.key?.remoteJid;
+      const senderInfo = metadata.participants.find((p) => sameJid(p.id, sender) || sameJid(p.lid, sender));
+      const botInfo = metadata.participants.find((p) =>
+        sameJid(p.id, sock.user?.id) || sameJid(p.lid, sock.user?.lid) ||
+        sameJid(p.id, (sock.user?.id || "").split(":")[0] + "@s.whatsapp.net")
+      );
+      if (!senderInfo?.admin && !senderInfo?.superadmin && !message.key?.fromMe) return send("❌ Only group admins can use this command.");
+      if (!botInfo?.admin && !botInfo?.superadmin) return send("❌ Make the bot a group admin first.");
 
-    const target = message.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
-    if (!target) {
-      await sock.sendMessage(jid, { text: "Usage: .demote @member" }, { quoted: message });
-      return;
-    }
-    const targetInfo = metadata.participants.find((p) => p.id === target || p.id?.startsWith(target.split("@")[0] + ":"));
-    if (!targetInfo) {
-      await sock.sendMessage(jid, { text: "❌ Admin not found in this group." }, { quoted: message });
-      return;
-    }
-    if (!targetInfo.admin) {
-      await sock.sendMessage(jid, { text: "ℹ️ That member is not an admin." }, { quoted: message });
-      return;
-    }
-    if (targetInfo.admin === "superadmin") {
-      await sock.sendMessage(jid, { text: "❌ The group owner cannot be demoted." }, { quoted: message });
-      return;
-    }
+      const context = message.message?.extendedTextMessage?.contextInfo;
+      const target = context?.mentionedJid?.[0] || context?.participant || context?.participantAlt;
+      if (!target) return send("Usage: mention an admin or reply to their message with .demote");
+      const member = metadata.participants.find((p) => sameJid(p.id, target) || sameJid(p.lid, target));
+      if (!member) return send("❌ Member not found in this group.");
+      if (!member.admin && !member.superadmin) return send("ℹ️ That member is not an admin.");
+      if (member.superadmin) return send("❌ The group owner cannot be demoted.");
 
-    await sock.groupParticipantsUpdate(jid, [targetInfo.id], "demote");
-    await sock.sendMessage(jid, { text: "✅ Admin demoted to member." }, { quoted: message });
+      await sock.groupParticipantsUpdate(jid, [member.id], "demote");
+      return send("✅ Admin demoted to member.");
+    } catch (error) {
+      console.error("[GALAXY-MD] Demote failed:", error.message || error);
+      return send("❌ Demote failed. Check that the bot is a group admin and try again.");
+    }
   },
 };
