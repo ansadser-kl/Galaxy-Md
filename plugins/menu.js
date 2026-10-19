@@ -55,13 +55,20 @@ module.exports = {
     }
 
     lines.push("🌠 *GALAXY-MD* • Powered by plugins");
-
-    const imagePath = path.join(__dirname, "..", "menu.png");
     const caption = lines.join("\n").trim();
+    const imagePath = path.join(__dirname, "..", "menu.png");
+
     if (fs.existsSync(imagePath)) {
-      await sock.sendMessage(jid, { image: fs.readFileSync(imagePath), caption }, { quoted: message });
+      try {
+        await sock.sendMessage(jid, { image: fs.readFileSync(imagePath), caption }, { quoted: message });
+        return;
+      } catch (error) {
+        console.error("[GALAXY-MD] Menu image send failed:", error.message || error);
+      }
     } else {
-      await sock.sendMessage(jid, { text: `${caption}\n\n⚠️ menu.png not found in bot main folder.` }, { quoted: message });
+      console.error(`[GALAXY-MD] Menu image not found at: ${imagePath}`);
     }
+
+    await sock.sendMessage(jid, { text: caption }, { quoted: message });
   },
 };
