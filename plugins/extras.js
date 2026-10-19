@@ -21,7 +21,7 @@ function getTarget(message) {
 module.exports = {
   name: "info",
   aliases: [
-    "admins", "getjids", "setprefix", "welcome", "antilink", "antiviewonce",
+    "admins", "getjids", "setprefix", "antilink", "antiviewonce",
     "autoreply", "setcmd", "getcmd",
     "delcmd", "setvideo", "setimage", "setbot", "setowner", "setsudo", "getsudo",
     "delsudo", "resetsession", "reboot", "forward", "send", "vn", "url"
