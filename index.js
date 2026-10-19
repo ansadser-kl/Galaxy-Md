@@ -120,6 +120,59 @@ async function startBot() {
 
     sock.ev.on("creds.update", saveCreds);
 
+    // Send configured welcome/goodbye messages when group participants change.
+    sock.ev.on("group-participants.update", async (update) => {
+      try {
+        const dataFile = path.join(__dirname, "galaxy-data.json");
+        let data = {};
+        try { data = JSON.parse(fs.readFileSync(dataFile, "utf8")); } catch {}
+        const group = data.groupMessages?.[update.id];
+        if (!group) return;
+        const action = String(update.action || "").toLowerCase();
+        const type = ["add", "invite", "join"].includes(action) ? "welcome"
+          : ["remove", "leave", "reject"].includes(action) ? "goodbye" : "";
+        const item = type && group[type];
+        if (!item?.message || item.enabled === false) return;
+        const metadata = await sock.groupMetadata(update.id).catch(() => ({}));
+        for (const participant of update.participants || []) {
+          const userJid = typeof participant === "string" ? participant : (participant.id || participant.jid || "");
+          if (!userJid) continue;
+          const number = String(userJid).split("@")[0].split(":")[0];
+          const values = {
+            "$mention": "@" + number,
+            "$user": number,
+            "$group": String(metadata.subject || "this group").replace(/[\\r\\n]+/g, " "),
+            "$count": String(metadata.participants?.length || 0),
+            "$desc": String(metadata.desc || "No description").replace(/[\\r\\n]+/g, " "),
+            "$date": new Date().toLocaleDateString(),
+            "$time": new Date().toLocaleTimeString()
+          };
+          let text = item.message;
+          for (const [key, value] of Object.entries(values)) text = text.split(key).join(value);
+          let imageUrl = "";
+          if (text.includes("$pp")) {
+            try { imageUrl = await sock.profilePictureUrl(userJid, "image"); } catch {}
+            text = text.split("$pp").join("");
+          }
+          if (text.includes("$gpp")) {
+            try {
+              const groupPic = await sock.profilePictureUrl(update.id, "image");
+              text = text.split("$gpp").join("");
+              await sock.sendMessage(update.id, { image: { url: groupPic }, caption: text, mentions: [userJid] });
+              continue;
+            } catch { text = text.split("$gpp").join(""); }
+          }
+          if (imageUrl) {
+            await sock.sendMessage(update.id, { image: { url: imageUrl }, caption: text, mentions: [userJid] });
+          } else {
+            await sock.sendMessage(update.id, { text, mentions: [userJid] });
+          }
+        }
+      } catch (error) {
+        console.error("[GALAXY-MD] Welcome/goodbye event error:", error.message || error);
+      }
+    });
+
     sock.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect } = update;
 
