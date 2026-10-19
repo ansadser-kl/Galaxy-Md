@@ -27,14 +27,14 @@ module.exports = {
     "delsudo", "resetsession", "reboot", "forward", "send", "vn", "url"
   ],
   description: "GALAXY-MD utility, moderation and owner controls",
-  async execute({ sock, jid, message, query, command, config, isPrivileged, args }) {
+  async execute({ sock, jid, message, query, command, config, isPrivileged, args, plugins }) {
     const data = readData();
     const reply = (text, extra = {}) => sock.sendMessage(jid, { text, ...extra }, { quoted: message });
     const ownerOnly = ["setprefix", "setcmd", "getcmd", "delcmd", "setvideo", "setimage", "setbot", "setowner", "setsudo", "getsudo", "delsudo", "resetsession", "reboot"].includes(command);
     if (ownerOnly && !isPrivileged) return reply("⛔ Owner/SUDO only.");
 
     if (command === "info") {
-      return reply("🤖 *GALAXY-MD*\n" + "Version: " + config.version + "\nMode: " + config.mode + "\nPrefix: " + config.prefix + "\nPlugins loaded: " + (arguments[0]?.plugins?.length ?? "dynamic"));
+      return reply("🤖 *GALAXY-MD*\n" + "Version: " + config.version + "\nMode: " + config.mode + "\nPrefix: " + config.prefix + "\nPlugins loaded: " + (plugins?.length ?? "dynamic"));
     }
     if (command === "admins") {
       if (!jid.endsWith("@g.us")) return reply("Group only.");
@@ -50,8 +50,8 @@ module.exports = {
     if (command === "setprefix") {
       const p = String(query || "").trim();
       if (!p || p.length > 3 || /\s/.test(p)) return reply("Usage: .setprefix <1-3 characters>");
-      data.prefix = p; save(data);
-      return reply("Prefix saved as: " + p + "\nRestart the bot for it to take effect.");
+      data.prefix = p; config.prefix = p; save(data);
+      return reply("Prefix changed to: " + p);
     }
     if (["welcome", "antilink", "antiviewonce", "autoreply"].includes(command)) {
       if (!jid.endsWith("@g.us") && command !== "autoreply") return reply("This command works in groups only.");
@@ -89,22 +89,22 @@ module.exports = {
     }
     if (command === "setbot") {
       if (!query.trim()) return reply("Usage: .setbot <new bot name>");
-      data.botName = query.trim().slice(0, 40); save(data); return reply("Bot display name saved. Some existing messages may still use config name.");
+      data.botName = query.trim().slice(0, 40); config.botName = data.botName; save(data); return reply("Bot display name saved.");
     }
     if (command === "setowner") {
       const n = String(query || "").replace(/\D/g, "");
       if (n.length < 8) return reply("Usage: .setowner <number with country code>");
-      data.ownerNumber = n; save(data); return reply("Owner number saved.");
+      data.ownerNumber = n; config.ownerNumber = n; save(data); return reply("Owner number saved.");
     }
     if (command === "setsudo") {
       const n = String(query || "").replace(/\D/g, "");
       if (n.length < 8) return reply("Usage: .setsudo <number with country code>");
-      data.sudo ||= []; if (!data.sudo.includes(n)) data.sudo.push(n); save(data); return reply("SUDO added: " + n);
+      data.sudo ||= []; if (!data.sudo.includes(n)) data.sudo.push(n); config.sudoNumbers = [...new Set([...(config.sudoNumbers || []), n])]; save(data); return reply("SUDO added: " + n);
     }
     if (command === "getsudo") return reply("SUDO numbers:\n" + ((data.sudo || config.sudoNumbers || []).join("\n") || "None"));
     if (command === "delsudo") {
       const n = String(query || "").replace(/\D/g, "");
-      data.sudo = (data.sudo || []).filter(x => x !== n); save(data); return reply("SUDO removed if it was present. Restart may be needed for config-based SUDO.");
+      data.sudo = (data.sudo || []).filter(x => x !== n); config.sudoNumbers = (config.sudoNumbers || []).filter(x => x !== n); save(data); return reply("SUDO removed if it was present.");
     }
     if (command === "setvideo" || command === "setimage") {
       if (!query.trim()) return reply("Usage: ." + command + " <URL>");
