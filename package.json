@@ -16,7 +16,6 @@
   "dependencies": {
     "baileys": "7.0.0-rc14",
     "dotenv": "^16.4.7",
-    "pino": "^9.6.0",
-    "sharp": "^0.34.2"
+    "pino": "^9.6.0"
   }
 }
