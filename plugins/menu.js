@@ -1,5 +1,7 @@
 "use strict";
 
+const fs = require("fs");
+const path = require("path");
 const config = require("../config");
 
 const CATEGORY_ORDER = ["General", "Utility", "Group", "Media", "Owner", "Other"];
@@ -10,9 +12,7 @@ function getCategory(plugin) {
   if (["ping", "alive", "menu", "help", "echo", "owner", "creator", "runtime", "uptime"].includes(name)) {
     return ["owner", "creator"].includes(name) ? "Owner" : "Utility";
   }
-  if (["kick", "remove", "promote", "demote", "tagall", "everyone", "groupinfo", "ginfo"].includes(name)) {
-    return "Group";
-  }
+  if (["kick", "remove", "promote", "demote", "tagall", "everyone", "groupinfo", "ginfo"].includes(name)) return "Group";
   if (["play", "yta", "ytv", "sticker", "vv"].includes(name)) return "Media";
   return "Other";
 }
@@ -55,6 +55,13 @@ module.exports = {
     }
 
     lines.push("🌠 *GALAXY-MD* • Powered by plugins");
-    await sock.sendMessage(jid, { text: lines.join("\n").trim() }, { quoted: message });
+
+    const imagePath = path.join(__dirname, "..", "menu.png");
+    const caption = lines.join("\n").trim();
+    if (fs.existsSync(imagePath)) {
+      await sock.sendMessage(jid, { image: fs.readFileSync(imagePath), caption }, { quoted: message });
+    } else {
+      await sock.sendMessage(jid, { text: `${caption}\n\n⚠️ menu.png not found in bot main folder.` }, { quoted: message });
+    }
   },
 };
