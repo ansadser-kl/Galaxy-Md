@@ -93,11 +93,8 @@ module.exports = {
       "│",
       "╰━━〔 *COMMAND CENTER* 〕━━╯",
       commandText || "\nNo commands found.",
-      "",
-      "╭─〔  *GALAXY-MD* 〕",
-      "│ ✦ Prefix: " + prefix,
-      "│ ✦ Choose a command and enjoy!",
-      "╰────────────────"
+      
+      
     ].join("\n");
 
     const imageUrl = "https://i.ibb.co/B5t1nd97/temp.jpg";
