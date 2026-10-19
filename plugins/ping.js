@@ -9,7 +9,7 @@ module.exports = {
     const ms = Math.max(0, Date.now() - start);
     await sock.sendMessage(
       jid,
-      { text: `PONG! ${ms} ms` },
+      { text: `*Latency* (${ms} ms)` },
       { quoted: message }
     );
   },
