@@ -9,7 +9,7 @@ const execFileAsync = promisify(execFile);
 
 module.exports = {
   name: "sticker",
-  aliases: ["s", "st"],
+  aliases: [],
   description: "Convert a replied image to a sticker",
   category: "Media",
   async execute({ sock, jid, message }) {
