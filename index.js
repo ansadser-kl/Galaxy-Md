@@ -1,8 +1,5 @@
 "use strict";
 
-// GALAXY-MD v1.0.0 — CommonJS .js entry point.
-// Baileys v7 is ESM, so it is loaded using dynamic import().
-
 require("dotenv").config();
 
 const fs = require("fs");
@@ -16,6 +13,7 @@ let reconnectTimer = null;
 let starting = false;
 let cachedPlugins = [];
 let cachedPluginSignature = "";
+let latestVersionCache = null;
 
 function getMessageText(message) {
   const msg = message && message.message;
@@ -34,10 +32,14 @@ function getMessageText(message) {
 }
 
 function loadPlugins() {
-  fs.mkdirSync(PLUGINS_DIR, { recursive: true });
-  const files = fs.readdirSync(PLUGINS_DIR)
-    .filter((name) => name.endsWith(".js"))
-    .sort();
+  let files;
+  try {
+    files = fs.readdirSync(PLUGINS_DIR).filter((name) => name.endsWith(".js")).sort();
+  } catch (error) {
+    if (error.code === "ENOENT") fs.mkdirSync(PLUGINS_DIR, { recursive: true });
+    files = [];
+  }
+
   const signature = files.map((file) => {
     try {
       const stat = fs.statSync(path.join(PLUGINS_DIR, file));
@@ -47,7 +49,6 @@ function loadPlugins() {
     }
   }).join("|");
 
-  // Avoid re-reading/requiring every plugin for every message.
   if (signature === cachedPluginSignature) return cachedPlugins;
 
   const plugins = [];
@@ -96,12 +97,13 @@ async function startBot() {
       return;
     }
 
-    let version;
-    if (typeof fetchLatestBaileysVersion === "function") {
+    let version = latestVersionCache;
+    if (!version && typeof fetchLatestBaileysVersion === "function") {
       try {
         const latest = await fetchLatestBaileysVersion();
         version = latest && latest.version;
-      } catch (error) {
+        if (version) latestVersionCache = version;
+      } catch {
         console.warn("[GALAXY-MD] Could not fetch WhatsApp version; using library defaults.");
       }
     }
@@ -111,9 +113,7 @@ async function startBot() {
       auth: state,
       logger: pino({ level: "silent" }),
       printQRInTerminal: false,
-      browser: typeof Browsers?.macOS === "function"
-        ? Browsers.macOS("Safari")
-        : ["Mac OS", "Safari", config.version],
+      browser: typeof Browsers?.macOS === "function" ? Browsers.macOS("Safari") : ["Mac OS", "Safari", config.version],
       markOnlineOnConnect: false,
       syncFullHistory: false,
     });
@@ -176,11 +176,12 @@ async function startBot() {
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
       if (type !== "notify") return;
 
+      const plugins = loadPlugins();
+
       for (const message of messages || []) {
         const receivedAt = Date.now();
         try {
           if (!message?.message) continue;
-
           const jid = message.key?.remoteJid;
           if (!jid || jid === "status@broadcast") continue;
 
@@ -190,9 +191,7 @@ async function startBot() {
           const senderIds = [
             message.key?.participant,
             message.key?.participantAlt,
-            ...(message.key?.fromMe
-              ? [sock.user?.id, sock.user?.lid, config.botNumber]
-              : [message.key?.remoteJid]),
+            ...(message.key?.fromMe ? [sock.user?.id, sock.user?.lid, config.botNumber] : [message.key?.remoteJid]),
           ].filter(Boolean);
           const senderNumbers = senderIds
             .map((id) => String(id).split("@")[0].split(":")[0].replace(/\D/g, ""))
@@ -215,25 +214,15 @@ async function startBot() {
           const command = commandRaw.toLowerCase();
           const query = args.join(" ");
 
-          const plugins = loadPlugins();
           const plugin = plugins.find((item) =>
             item.name.toLowerCase() === command ||
             (Array.isArray(item.aliases) && item.aliases.some((alias) => String(alias).toLowerCase() === command))
           );
-
           if (!plugin) continue;
 
           await plugin.execute({
-            sock,
-            jid,
-            message,
-            args,
-            query,
-            command,
-            config,
-            plugins,
-            receivedAt,
-            isPrivileged,
+            sock, jid, message, args, query, command, config, plugins,
+            receivedAt, isPrivileged,
             setMode: (mode) => { config.mode = mode; },
           });
         } catch (error) {
@@ -254,13 +243,8 @@ async function startBot() {
   }
 }
 
-process.on("unhandledRejection", (error) => {
-  console.error("[GALAXY-MD] Unhandled rejection:", error);
-});
-
-process.on("uncaughtException", (error) => {
-  console.error("[GALAXY-MD] Uncaught exception:", error);
-});
+process.on("unhandledRejection", (error) => console.error("[GALAXY-MD] Unhandled rejection:", error));
+process.on("uncaughtException", (error) => console.error("[GALAXY-MD] Uncaught exception:", error));
 
 console.log([
   "╔══════════════════════════════╗",
