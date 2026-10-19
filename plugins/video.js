@@ -1,5 +1,12 @@
 "use strict";
 
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { execFile } = require("child_process");
+const { promisify } = require("util");
+const execFileAsync = promisify(execFile);
+
 module.exports = {
   name: "video",
   aliases: ["ytv"],
@@ -48,23 +55,38 @@ module.exports = {
       });
 
       if (!download.ok) throw new Error("Video download failed (HTTP " + download.status + ").");
-      const contentLength = Number(download.headers.get("content-length") || media.fileSize || 0);
-      if (contentLength > 64 * 1024 * 1024) {
-        throw new Error("The 360p video is too large to send through this command.");
-      }
-
       const buffer = Buffer.from(await download.arrayBuffer());
       if (!buffer.length) throw new Error("The downloaded video is empty.");
-      if (buffer.length > 64 * 1024 * 1024) {
-        throw new Error("The 360p video is too large to send through this command.");
-      }
 
-      await sock.sendMessage(jid, {
-        video: buffer,
-        mimetype: "video/mp4",
-        fileName: "galaxy-video-360p.mp4",
-        caption: (result.data.title || "YouTube Video") + "\nQuality: 360p"
-      }, { quoted: message });
+      const input = path.join(os.tmpdir(), "galaxy-video-" + Date.now() + ".mp4");
+      const output = input.replace(/\.mp4$/, "-compressed.mp4");
+      try {
+        fs.writeFileSync(input, buffer);
+        await sock.sendMessage(jid, { text: "Compressing 360p video for WhatsApp..." }, { quoted: message });
+        await execFileAsync("ffmpeg", [
+          "-y", "-i", input, "-vf", "scale=-2:360", "-c:v", "libx264",
+          "-preset", "veryfast", "-b:v", "650k", "-maxrate", "800k",
+          "-bufsize", "1300k", "-c:a", "aac", "-b:a", "96k",
+          "-movflags", "+faststart", output
+        ], { timeout: 300000 });
+
+        const compressed = fs.readFileSync(output);
+        if (!compressed.length) throw new Error("FFmpeg produced an empty video.");
+        if (compressed.length > 64 * 1024 * 1024) {
+          throw new Error("Compressed video is still too large for WhatsApp.");
+        }
+
+        await sock.sendMessage(jid, {
+          video: compressed,
+          mimetype: "video/mp4",
+          fileName: "galaxy-video-360p.mp4",
+          caption: (result.data.title || "YouTube Video") + "\nQuality: 360p (compressed)"
+        }, { quoted: message });
+      } finally {
+        for (const file of [input, output]) {
+          try { fs.unlinkSync(file); } catch {}
+        }
+      }
     } catch (error) {
       console.error("[GALAXY-MD] Video download failed:", error);
       await sock.sendMessage(
