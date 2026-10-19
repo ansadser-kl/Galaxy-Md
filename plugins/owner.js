@@ -4,7 +4,7 @@ const config = require("../config");
 
 module.exports = {
   name: "owner",
-  aliases: ["creator"],
+  aliases: [],
   description: "Send bot owner contact card",
   async execute({ sock, jid, message }) {
     const number = String(config.ownerNumber || "").replace(/\D/g, "");
