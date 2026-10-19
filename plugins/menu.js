@@ -83,9 +83,7 @@ module.exports = {
       commandText || "\nNo commands found."
     ].join("\n");
 
-    const configuredImage = String(data.setimage || "").trim();
-    const defaultImage = "https://raw.githubusercontent.com/ansadser-kl/Galaxy-Md/main/utils/images/default.png";
-    const imageUrl = configuredImage || defaultImage;
+    const imageUrl = "https://i.ibb.co/B5t1nd97/temp.jpg";
     try {
       await sock.sendMessage(jid, { image: { url: imageUrl }, caption }, { quoted: message });
     } catch (error) {
