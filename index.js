@@ -263,15 +263,6 @@ async function startBot() {
               await sock.sendMessage(jid, { delete: message.key }).catch(() => {});
               continue;
             }
-            if (feature("antiviewonce") && !message.key?.fromMe && !senderIsAdmin && (message.message?.viewOnceMessage || message.message?.viewOnceMessageV2 || message.message?.viewOnceMessageV2Extension)) {
-              await sock.sendMessage(jid, { text: "⛔ View-once media is disabled in this group." }).catch(() => {});
-              if (botIsAdmin) await sock.sendMessage(jid, { delete: message.key }).catch(() => {});
-              continue;
-            }
-            if (feature("autoreply") && !message.key?.fromMe && text && !text.startsWith(config.prefix)) {
-              const answer = data.autoReplyText?.[jid] || "Thanks for your message!";
-              await sock.sendMessage(jid, { text: answer }, { quoted: message }).catch(() => {});
-            }
           }
 
           if (!text.startsWith(config.prefix)) continue;
@@ -303,15 +294,6 @@ async function startBot() {
           const [commandRaw, ...args] = input.split(/\s+/);
           const command = commandRaw.toLowerCase();
           const query = args.join(" ");
-
-          // Simple custom text commands saved by .setcmd name|response.
-          let customData = {};
-          try { customData = JSON.parse(fs.readFileSync(path.join(__dirname, "galaxy-data.json"), "utf8")); } catch {}
-          const customReply = customData.customCommands?.[command];
-          if (typeof customReply === "string") {
-            await sock.sendMessage(jid, { text: customReply }, { quoted: message });
-            continue;
-          }
 
           const plugin = plugins.find((item) =>
             item.name.toLowerCase() === command ||
