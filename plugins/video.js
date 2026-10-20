@@ -8,7 +8,7 @@ const { pipeline } = require("stream/promises");
 
 module.exports = {
   name: "video",
-  aliases: ["ytv"],
+  aliases: [],
   description: "Download YouTube videos in 360p",
   category: "Downloader",
   async execute({ sock, jid, message, text, args }) {
