@@ -9,7 +9,9 @@ const execFileAsync = promisify(execFile);
 const baileys = require("baileys");
 const downloadMediaMessage = baileys.downloadMediaMessage;
 
-// 64-bar waveform (0-100) ffmpeg raw PCM-il ninnu
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 64-bar waveform (0-100)
 async function makeWaveform(file) {
   try {
     const { stdout } = await execFileAsync(
@@ -61,7 +63,7 @@ async function getDuration(file) {
 module.exports = {
   name: "fd",
   aliases: [],
-  description: "Send replied audio as a voice note to a target JID / channel",
+  description: "Send replied audio as a voice note to a target JID / channel (debug)",
   category: "Downloader",
   async execute({ sock, jid, message, text, args }) {
     const input = String(text || args?.join(" ") || "").trim();
@@ -90,6 +92,12 @@ module.exports = {
       return;
     }
 
+    // WhatsApp server-inte ACK (error undenkil ivide kaanum)
+    const ackHandler = (node) => {
+      console.log("[fd] ACK:", JSON.stringify(node?.attrs || node));
+    };
+    try { sock.ws.on("CB:ack,class:message", ackHandler); } catch {}
+
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "galaxy-fd-"));
     try {
       await sock.sendMessage(jid, { text: "🎙️ Audio voice note formatilekku convert cheyyunnu..." }, { quoted: message });
@@ -106,7 +114,6 @@ module.exports = {
       const outputFile = path.join(tempDir, "voice-note.ogg");
       fs.writeFileSync(inputFile, audioBuffer);
 
-      // valiya audio aanenkil bitrate kurakkum (channel upload limit ozhivakkan)
       const inDuration = (await getDuration(inputFile)) || 0;
       const bitrate = inDuration > 180 ? "24k" : "48k";
       console.log(`[fd] input duration: ${inDuration}s, bitrate: ${bitrate}`);
@@ -137,48 +144,42 @@ module.exports = {
       const seconds = await getDuration(outputFile);
       const waveform = await makeWaveform(outputFile);
 
-      const content = {
-        audio: voiceBuffer,
-        mimetype: "audio/ogg; codecs=opus",
-        ptt: true,
-      };
-      if (seconds) content.seconds = seconds;
-      if (waveform) content.waveform = waveform;
+      const full = { audio: voiceBuffer, mimetype: "audio/ogg; codecs=opus", ptt: true };
+      if (seconds) full.seconds = seconds;
+      if (waveform) full.waveform = waveform;
 
-      const trySend = async (label, payload) => {
+      // 4 variant, ellam channel-ilekk ayakkum (TEST label text-oode)
+      const variants = [
+        ["A ptt+waveform+seconds", full],
+        ["B ptt plain", { audio: voiceBuffer, mimetype: "audio/ogg; codecs=opus", ptt: true }],
+        ["C audio non-ptt", { audio: voiceBuffer, mimetype: "audio/ogg; codecs=opus" }],
+        ["D mimetype audio/ogg", { audio: voiceBuffer, mimetype: "audio/ogg", ptt: true }],
+      ];
+
+      let anyOk = false;
+      for (const [label, payload] of variants) {
         try {
+          await sock.sendMessage(targetJid, { text: "TEST " + label });
           const res = await sock.sendMessage(targetJid, payload);
-          console.log(`[fd] ${label} OK:`, JSON.stringify(res?.key || res));
-          return res;
+          const am = res?.message?.audioMessage;
+          console.log(`[fd] ${label} sent:`, JSON.stringify(res?.key || res));
+          console.log(
+            `[fd] ${label} url=${am?.url ? "yes" : "NO"} directPath=${am?.directPath ? "yes" : "NO"}`
+          );
+          anyOk = true;
         } catch (e) {
           console.error(`[fd] ${label} FAIL:`, e?.message || e);
-          return null;
         }
-      };
-
-      // 1) ptt + waveform + seconds
-      let res = await trySend("ptt+waveform", content);
-
-      // 2) ptt, waveform illathe
-      if (!res) {
-        res = await trySend("ptt-plain", {
-          audio: voiceBuffer,
-          mimetype: "audio/ogg; codecs=opus",
-          ptt: true,
-        });
+        await sleep(3000);
       }
 
-      // 3) normal audio (ptt illathe)
-      if (!res) {
-        res = await trySend("audio-nonptt", {
-          audio: voiceBuffer,
-          mimetype: "audio/ogg; codecs=opus",
-        });
-      }
+      if (!anyOk) throw new Error("Ellaa variant-um fail aayi (console log nokku)");
 
-      if (!res) throw new Error("Channel audio send failed (console log nokku)");
-
-      await sock.sendMessage(jid, { text: "✅ Voice note target JID-lekk ayachu." }, { quoted: message });
+      await sock.sendMessage(
+        jid,
+        { text: "✅ 4 variant ayachu. Channel-il ethu TEST-inte thazhe audio vannu ennu nokku." },
+        { quoted: message }
+      );
     } catch (error) {
       console.error("[GALAXY-MD] .fd failed:", error);
       await sock.sendMessage(
@@ -187,6 +188,7 @@ module.exports = {
         { quoted: message }
       );
     } finally {
+      try { sock.ws.off("CB:ack,class:message", ackHandler); } catch {}
       try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
     }
   },
