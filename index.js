@@ -265,7 +265,14 @@ async function startBot() {
             }
           }
 
-          if (!text.startsWith(config.prefix)) continue;
+          if (!text.startsWith(config.prefix)) {
+            for (const plugin of plugins) {
+              if (typeof plugin.handleReply !== "function") continue;
+              const handled = await plugin.handleReply({ sock, jid, message, text, config, plugins });
+              if (handled) break;
+            }
+            continue;
+          }
 
           const senderIds = [
             message.key?.participant,
