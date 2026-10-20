@@ -54,7 +54,7 @@ module.exports = {
         { quoted: message }
       );
 
-      const apiUrl = "https://api.nexray.eu.cc/downloader/ytmp3?url=" + encodeURIComponent(url);
+      const apiUrl = "https://eliteprotech-apis.zone.id/download/ytmp3?url=" + encodeURIComponent(url);
       const response = await fetch(apiUrl, {
         method: "GET",
         headers: {
@@ -65,23 +65,23 @@ module.exports = {
       });
 
       if (!response.ok) {
-        throw new Error("NexRay API returned HTTP " + response.status);
+        throw new Error("EliteProTech API returned HTTP " + response.status);
       }
 
       const result = await response.json();
 
-      if (result?.status !== true || typeof result?.result?.url !== "string" || !result.result.url.trim()) {
-        throw new Error("NexRay API did not return a valid MP3 link.");
+      if (result?.status !== true || typeof result?.download?.downloadUrl !== "string" || !result.download.downloadUrl.trim()) {
+        throw new Error("EliteProTech API did not return a valid MP3 link.");
       }
 
-      const downloadUrl = result.result.url;
-      const title = String(result.result.title || "youtube-audio");
+      const downloadUrl = result.download.downloadUrl;
+      const title = String(result.download.title || "youtube-audio");
 
       await editStatus("⬇️ Downloading MP3...");
 
       const downloadRes = await fetch(downloadUrl, {
         headers: {
-          Referer: "https://api.nexray.eu.cc/",
+          Referer: "https://eliteprotech-apis.zone.id/",
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
           Accept: "audio/mpeg,audio/*;q=0.9,*/*;q=0.8"
         },
