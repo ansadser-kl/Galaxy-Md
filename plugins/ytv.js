@@ -18,7 +18,7 @@ function getVideoId(url) {
     const parsed = new URL(url);
     if (parsed.hostname.includes("youtu.be")) return parsed.pathname.slice(1).split("/")[0] || "Unknown";
     if (parsed.pathname === "/watch") return parsed.searchParams.get("v") || "Unknown";
-    const match = parsed.pathname.match(/\\/(?:shorts|embed|live)\\/([^/?]+)/);
+    const match = parsed.pathname.match(/\/(?:shorts|embed|live)\/([^/?]+)/);
     return match?.[1] || "Unknown";
   } catch {
     return "Unknown";
@@ -114,10 +114,10 @@ module.exports = {
         (index + 1) + ". " + String(item.quality || "Unknown quality") + " — " + item.size
       );
       await sock.sendMessage(jid, {
-        text: "🎬 *" + String(result.title || "YouTube video").slice(0, 180) + "*\\n" +
-          "🆔 Video ID: " + videoId + "\\n\\n" +
-          "📥 *Available video qualities*\\n" + lines.join("\\n") + "\\n\\n" +
-          "Reply with the number of your preferred quality.\\n" +
+        text: "🎬 *" + String(result.title || "YouTube video").slice(0, 180) + "*\n" +
+          "🆔 Video ID: " + videoId + "\n\n" +
+          "📥 *Available video qualities*\n" + lines.join("\n") + "\n\n" +
+          "Reply with the number of your preferred quality.\n" +
           "⏳ Selection expires in 10 minutes."
       }, { quoted: message });
 
