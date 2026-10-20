@@ -8,7 +8,7 @@ const { pipeline } = require("stream/promises");
 
 module.exports = {
   name: "play",
-  aliases: [],
+  aliases: ["song"],
   description: "Search and download a song as MP3",
   category: "Downloader",
 
@@ -18,7 +18,7 @@ module.exports = {
     if (!query) {
       return sock.sendMessage(
         jid,
-        { text: "Please enter a song name!\nExample: .play Varnajaalam betleham" },
+        { text: "Please enter a song name!\nExample: .play Varnajaalam betleham\nAlias: .song <song name>" },
         { quoted: message }
       );
     }
@@ -40,7 +40,7 @@ module.exports = {
           });
         }
       } catch (err) {
-        console.warn("[GALAXY-MD] Failed to edit .play status:", err?.message);
+        console.warn("[GALAXY-MD] Failed to edit song status:", err?.message);
       }
     };
 
@@ -121,7 +121,7 @@ module.exports = {
       await editStatus("✅ Song sent successfully!");
 
     } catch (error) {
-      console.error("[GALAXY-MD] .play download error:", error);
+      console.error("[GALAXY-MD] song download error:", error);
       await editStatus("❌ Song download failed!\nAPI error");
     } finally {
       try {
@@ -129,7 +129,7 @@ module.exports = {
           fs.unlinkSync(tempFile);
         }
       } catch (err) {
-        console.warn("[GALAXY-MD] Could not delete .play temp file:", err?.message);
+        console.warn("[GALAXY-MD] Could not delete song temp file:", err?.message);
       }
     }
   }
