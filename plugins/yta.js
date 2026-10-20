@@ -33,51 +33,58 @@ module.exports = {
     };
 
     try {
-      statusMessage = await sock.sendMessage(jid, { text: "🎵 Downloading YouTube audio..." }, { quoted: message });
+      statusMessage = await sock.sendMessage(jid, { text: "🎵 Getting YouTube MP3 link..." }, { quoted: message });
 
-      const apiUrl = "https://jerrycoder.oggyapi.workers.dev/down/ytmp3?url=" + encodeURIComponent(url);
-      const response = await fetch(apiUrl, {
-        headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
+      // Request a fresh MP3 link from pullmp3 immediately before downloading.
+      const response = await fetch("https://pullmp3.cc/convert", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-Requested-With": "XMLHttpRequest",
+          Origin: "https://pullmp3.cc",
+          Referer: "https://pullmp3.cc/",
+          "User-Agent": "Mozilla/5.0"
+        },
+        body: JSON.stringify({ url, format: "mp3" }),
         signal: AbortSignal.timeout(60000)
       });
 
-      if (!response.ok) throw new Error("YouTube audio API returned HTTP " + response.status);
+      if (!response.ok) throw new Error("pullmp3 API returned HTTP " + response.status);
       const result = await response.json();
+      const rawLink = result?.link;
 
-      if (result?.status !== "success" || typeof result.url !== "string" || !/^https?:\/\//i.test(result.url)) {
-        throw new Error("Could not get an MP3 download link for this video.");
+      if (typeof rawLink !== "string" || !rawLink.trim()) {
+        throw new Error("pullmp3 did not return a download link: " + JSON.stringify(result).slice(0, 180));
       }
 
-      // The provider's MP3 host may reject a plain request; try its direct link with browser-like headers.
-      let download;
-      let lastStatus = 0;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        download = await fetch(result.url, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            Accept: "audio/mpeg,audio/*;q=0.9,*/*;q=0.8",
-            Referer: "https://jerrycoder.oggyapi.workers.dev/",
-            Range: "bytes=0-"
-          },
-          redirect: "follow",
-          signal: AbortSignal.timeout(300000)
-        });
-
-        if (download.ok && download.body) break;
-        lastStatus = download.status;
-        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 800));
+      const downloadUrl = new URL(rawLink, "https://pullmp3.cc/").toString();
+      if (!/^https?:$/.test(new URL(downloadUrl).protocol)) {
+        throw new Error("pullmp3 returned an invalid download link.");
       }
 
-      if (!download?.ok || !download.body) {
-        throw new Error("MP3 host returned HTTP " + lastStatus + ". The API may be returning an expired/broken download link.");
+      await editStatus("⬇️ Downloading MP3...");
+      const download = await fetch(downloadUrl, {
+        headers: {
+          Referer: "https://pullmp3.cc/",
+          Origin: "https://pullmp3.cc",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(300000)
+      });
+
+      if (!download.ok || !download.body) {
+        throw new Error("MP3 download failed (HTTP " + download.status + ").");
       }
 
       await pipeline(Readable.fromWeb(download.body), fs.createWriteStream(tempFile));
       const stats = fs.statSync(tempFile);
-      if (!stats.size) throw new Error("The downloaded audio file is empty.");
+      if (!stats.size) throw new Error("The downloaded MP3 file is empty.");
 
       await editStatus("📤 Sending MP3...");
-      const safeTitle = String(result.title || "youtube-audio").replace(/[\\/:*?"<>|]/g, "_").trim().slice(0, 180) || "youtube-audio";
+      const safeTitle = String(result.title || "youtube-audio")
+        .replace(/[\\/:*?"<>|]/g, "_").trim().slice(0, 180) || "youtube-audio";
 
       await sock.sendMessage(jid, {
         audio: { url: tempFile },
