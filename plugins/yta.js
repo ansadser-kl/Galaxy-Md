@@ -50,110 +50,47 @@ module.exports = {
     try {
       statusMessage = await sock.sendMessage(
         jid,
-        { text: "🎵 Requesting YouTube conversion..." },
+        { text: "🎵 Getting YouTube audio link..." },
         { quoted: message }
       );
 
-      const commonHeaders = {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Referer: "https://pullmp3.cc/",
-        Origin: "https://pullmp3.cc"
-      };
-
-      // 1. Initial convert request
-      const initResponse = await fetch("https://pullmp3.cc/convert", {
-        method: "POST",
+      const apiUrl = "https://api.nexray.eu.cc/downloader/ytmp3?url=" + encodeURIComponent(url);
+      const response = await fetch(apiUrl, {
+        method: "GET",
         headers: {
-          ...commonHeaders,
-          "Content-Type": "application/json",
           Accept: "application/json",
-          "X-Requested-With": "XMLHttpRequest"
+          "User-Agent": "Mozilla/5.0"
         },
-        body: JSON.stringify({
-          url,
-          format: "mp3"
-        }),
-        signal: AbortSignal.timeout(30000)
+        signal: AbortSignal.timeout(60000)
       });
 
-      if (!initResponse.ok) {
-        throw new Error(`Conversion API returned HTTP ${initResponse.status}`);
+      if (!response.ok) {
+        throw new Error("NexRay API returned HTTP " + response.status);
       }
 
-      const initResult = await initResponse.json();
+      const result = await response.json();
 
-      if (!initResult?.success) {
-        throw new Error(initResult?.message || "Server rejected conversion request.");
+      if (result?.status !== true || typeof result?.result?.url !== "string" || !result.result.url.trim()) {
+        throw new Error("NexRay API did not return a valid MP3 link.");
       }
 
-      let downloadUrl = "";
-      let title = initResult?.title || "youtube-audio";
-
-      // 2. Check if instant download link was provided (Backup API)
-      if (typeof initResult.link === "string" && initResult.link.trim()) {
-        downloadUrl = initResult.link.trim();
-      } 
-      // 3. Otherwise, poll the /progress endpoint (Primary API)
-      else if (initResult.progress_id) {
-        const { progress_id, video_id, log_id } = initResult;
-        const maxAttempts = 35;
-        const pollDelayMs = 2500;
-        let isComplete = false;
-
-        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-          await editStatus(`⏳ Converting audio... (${Math.min(attempt * 3, 95)}%)`);
-          await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
-
-          const pollUrl = new URL("https://pullmp3.cc/progress");
-          pollUrl.searchParams.set("progress_id", progress_id);
-          pollUrl.searchParams.set("format", "mp3");
-          if (video_id) pollUrl.searchParams.set("video_id", video_id);
-          if (log_id) pollUrl.searchParams.set("log_id", log_id);
-
-          const pollRes = await fetch(pollUrl.toString(), {
-            headers: {
-              ...commonHeaders,
-              Accept: "application/json",
-              "X-Requested-With": "XMLHttpRequest"
-            },
-            signal: AbortSignal.timeout(15000)
-          });
-
-          if (!pollRes.ok) continue;
-
-          const pollData = await pollRes.json();
-
-          if (pollData?.data?.failed) {
-            throw new Error("Conversion failed on provider server.");
-          }
-
-          if (pollData?.data?.finished && pollData?.data?.downloadUrl) {
-            downloadUrl = pollData.data.downloadUrl;
-            if (pollData.data.title) title = pollData.data.title;
-            isComplete = true;
-            break;
-          }
-        }
-
-        if (!isComplete || !downloadUrl) {
-          throw new Error("Timed out waiting for MP3 conversion to finish.");
-        }
-      } else {
-        throw new Error("Unrecognized response format from conversion service.");
-      }
+      const downloadUrl = result.result.url;
+      const title = String(result.result.title || "youtube-audio");
 
       await editStatus("⬇️ Downloading MP3...");
 
-      // 4. Download file from CDN
       const downloadRes = await fetch(downloadUrl, {
-        headers: commonHeaders,
+        headers: {
+          Referer: "https://api.nexray.eu.cc/",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+          Accept: "audio/mpeg,audio/*;q=0.9,*/*;q=0.8"
+        },
         redirect: "follow",
-        signal: AbortSignal.timeout(180000)
+        signal: AbortSignal.timeout(300000)
       });
 
       if (!downloadRes.ok || !downloadRes.body) {
-        throw new Error(`File download failed (HTTP ${downloadRes.status}).`);
+        throw new Error("MP3 download failed (HTTP " + downloadRes.status + ").");
       }
 
       await pipeline(
@@ -166,9 +103,9 @@ module.exports = {
         throw new Error("The downloaded MP3 file is empty.");
       }
 
-      await editStatus("📤 Uploading MP3...");
+      await editStatus("📤 Sending MP3...");
 
-      const safeTitle = String(title)
+      const safeTitle = title
         .replace(/[\\/:*?"<>|]/g, "_")
         .trim()
         .slice(0, 100) || "audio";
@@ -178,7 +115,7 @@ module.exports = {
         {
           audio: { url: tempFile },
           mimetype: "audio/mpeg",
-          fileName: `${safeTitle}.mp3`,
+          fileName: safeTitle + ".mp3",
           ptt: false
         },
         { quoted: message }
@@ -189,18 +126,10 @@ module.exports = {
     } catch (error) {
       console.error("[GALAXY-MD] YouTube audio download error:", error);
 
-      try {
-        await editStatus(
-          "❌ Download failed!\n" +
-          String(error?.message || error).slice(0, 180)
-        );
-      } catch {
-        await sock.sendMessage(
-          jid,
-          { text: "❌ YouTube audio download failed. Please try again." },
-          { quoted: message }
-        );
-      }
+      await editStatus(
+        "❌ Download failed!\n" +
+        String(error?.message || error).slice(0, 180)
+      );
 
     } finally {
       try {
