@@ -1,24 +1,14 @@
 "use strict";
 
-const config = require("../config");
 const baileys = require("baileys");
 const downloadMediaMessage = baileys.downloadMediaMessage;
 
 module.exports = {
   name: "fd",
   aliases: [],
-  description: "Send replied audio as a voice note to a target JID (owner only)",
-  category: "Owner",
+  description: "Send replied audio as a voice note to a target JID",
+  category: "Downloader",
   async execute({ sock, jid, message, text, args }) {
-    const sender = message?.key?.participant || message?.key?.remoteJid || "";
-    const senderNumber = String(sender.split("@")[0].split(":")[0] || "").replace(/\D/g, "");
-    const ownerNumber = String(config.ownerNumber || "").replace(/\D/g, "");
-
-    if (!ownerNumber || senderNumber !== ownerNumber) {
-      await sock.sendMessage(jid, { text: "❌ Ee command bot owner/admin maathram use cheyyam." }, { quoted: message });
-      return;
-    }
-
     const input = String(text || args?.join(" ") || "").trim();
     const targetJid = input.split(/\s+/)[0];
     if (!targetJid || !/^[0-9]+@(s\.whatsapp\.net|g\.us|newsletter)$/.test(targetJid)) {
