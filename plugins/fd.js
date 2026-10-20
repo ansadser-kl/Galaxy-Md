@@ -9,7 +9,8 @@ const execFileAsync = promisify(execFile);
 const baileys = require("baileys");
 const downloadMediaMessage = baileys.downloadMediaMessage;
 
-// 64-bar waveform (0-100)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function makeWaveform(file) {
   try {
     const { stdout } = await execFileAsync(
@@ -58,40 +59,10 @@ async function getDuration(file) {
   }
 }
 
-// message ayachittu server ACK-il error undo ennu nokkum (max 6s)
-function waitForAck(sock, id, timeoutMs = 6000) {
-  return new Promise((resolve) => {
-    const handler = (node) => {
-      const a = node?.attrs || {};
-      if (a.id === id) {
-        cleanup();
-        resolve(a.error ? String(a.error) : null);
-      }
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve(null); // ACK vannilla, success aayi kanakkakkum
-    }, timeoutMs);
-    const cleanup = () => {
-      clearTimeout(timer);
-      try { sock.ws.off("CB:ack,class:message", handler); } catch {}
-    };
-    try { sock.ws.on("CB:ack,class:message", handler); } catch { cleanup(); resolve(null); }
-  });
-}
-
-async function sendAndCheck(sock, targetJid, payload, label) {
-  const res = await sock.sendMessage(targetJid, payload);
-  const id = res?.key?.id;
-  const err = id ? await waitForAck(sock, id) : null;
-  console.log(`[fd] ${label}: id=${id} ${err ? "ACK ERROR " + err : "OK"}`);
-  return err ? null : res;
-}
-
 module.exports = {
   name: "fd",
   aliases: [],
-  description: "Send replied audio as a voice note to a target JID / channel",
+  description: "Send replied audio as voice note to a JID/channel (encoding test)",
   category: "Downloader",
   async execute({ sock, jid, message, text, args }) {
     const input = String(text || args?.join(" ") || "").trim();
@@ -99,7 +70,7 @@ module.exports = {
     if (!targetJid || !/^[0-9]+@(s\.whatsapp\.net|g\.us|newsletter)$/.test(targetJid)) {
       await sock.sendMessage(
         jid,
-        { text: "Usage: reply to an audio and type .fd <jid>\nExample: .fd 120363412182028819@newsletter" },
+        { text: "Usage: reply to an audio and type .fd <jid>" },
         { quoted: message }
       );
       return;
@@ -120,9 +91,15 @@ module.exports = {
       return;
     }
 
+    const ackHandler = (node) => {
+      const a = node?.attrs || {};
+      console.log("[fd] ACK:", JSON.stringify(a), a.error ? "<-- ERROR " + a.error : "");
+    };
+    try { sock.ws.on("CB:ack,class:message", ackHandler); } catch {}
+
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "galaxy-fd-"));
     try {
-      await sock.sendMessage(jid, { text: "🎙️ Audio voice note formatilekku convert cheyyunnu..." }, { quoted: message });
+      await sock.sendMessage(jid, { text: "🎙️ 4 encoding test ayakkunnu..." }, { quoted: message });
 
       const audioBuffer = await downloadMediaMessage(
         quotedMessage,
@@ -133,68 +110,76 @@ module.exports = {
       if (!audioBuffer || !audioBuffer.length) throw new Error("Audio download failed");
 
       const inputFile = path.join(tempDir, "input-audio");
-      const outputFile = path.join(tempDir, "voice-note.ogg");
       fs.writeFileSync(inputFile, audioBuffer);
 
-      // valiya audio-nu bitrate kurakkum
-      const inDuration = (await getDuration(inputFile)) || 0;
-      const bitrate = inDuration > 180 ? "24k" : "48k";
-
-      await execFileAsync(
-        "ffmpeg",
+      // 4 encoding variant
+      const encodings = [
         [
-          "-y", "-i", inputFile, "-vn", "-map_metadata", "-1",
-          "-c:a", "libopus", "-b:a", bitrate, "-vbr", "off",
-          "-compression_level", "10", "-frame_duration", "20",
-          "-application", "audio", "-ac", "1", "-ar", "48000",
-          "-f", "ogg", outputFile,
+          "1 current 48k/48kHz vbr-off",
+          ["-b:a", "48k", "-vbr", "off", "-compression_level", "10", "-frame_duration", "20", "-application", "audio", "-ar", "48000"],
+          true,
         ],
-        { timeout: 180000 }
-      );
+        [
+          "2 whatsapp-native 16kHz 24k voip",
+          ["-b:a", "24k", "-vbr", "on", "-application", "voip", "-ar", "16000"],
+          true,
+        ],
+        [
+          "3 common-bot-recipe 128k vbr-on",
+          ["-b:a", "128k", "-vbr", "on", "-compression_level", "10", "-ar", "48000"],
+          true,
+        ],
+        [
+          "4 recipe-3 but no waveform/seconds",
+          ["-b:a", "128k", "-vbr", "on", "-compression_level", "10", "-ar", "48000"],
+          false,
+        ],
+      ];
 
-      const voiceBuffer = fs.readFileSync(outputFile);
-      if (!voiceBuffer.length) throw new Error("Audio conversion returned an empty file");
-
-      const seconds = await getDuration(outputFile);
-      const waveform = await makeWaveform(outputFile);
-
-      const full = { audio: voiceBuffer, mimetype: "audio/ogg; codecs=opus", ptt: true };
-      if (seconds) full.seconds = seconds;
-      if (waveform) full.waveform = waveform;
-
-      // 1) waveform-oode voice note
-      let res = null;
-      try {
-        res = await sendAndCheck(sock, targetJid, full, "ptt+waveform");
-      } catch (e) {
-        console.error("[fd] ptt+waveform FAIL:", e?.message || e);
-      }
-
-      // 2) fail aayal waveform illathe
-      if (!res) {
+      let anyOk = false;
+      for (let i = 0; i < encodings.length; i++) {
+        const [label, opts, withMeta] = encodings[i];
+        const out = path.join(tempDir, `v${i + 1}.ogg`);
         try {
-          res = await sendAndCheck(
-            sock,
-            targetJid,
-            { audio: voiceBuffer, mimetype: "audio/ogg; codecs=opus", ptt: true },
-            "ptt-plain"
+          await execFileAsync(
+            "ffmpeg",
+            ["-y", "-i", inputFile, "-vn", "-map_metadata", "-1", "-c:a", "libopus", ...opts, "-ac", "1", "-f", "ogg", out],
+            { timeout: 180000 }
           );
+          const buf = fs.readFileSync(out);
+          const payload = { audio: buf, mimetype: "audio/ogg; codecs=opus", ptt: true };
+          if (withMeta) {
+            const seconds = await getDuration(out);
+            const waveform = await makeWaveform(out);
+            if (seconds) payload.seconds = seconds;
+            if (waveform) payload.waveform = waveform;
+          }
+          await sock.sendMessage(targetJid, { text: "TEST " + label });
+          const res = await sock.sendMessage(targetJid, payload);
+          console.log(`[fd] ${label}: sent id=${res?.key?.id}, size=${(buf.length / 1024).toFixed(1)} KB`);
+          anyOk = true;
         } catch (e) {
-          console.error("[fd] ptt-plain FAIL:", e?.message || e);
+          console.error(`[fd] ${label} FAIL:`, e?.message || e);
         }
+        await sleep(3000);
       }
 
-      if (!res) throw new Error("Channel-ilekk audio ayakkan pattiyilla (console log nokku)");
+      if (!anyOk) throw new Error("Ellaa variant-um fail aayi (console log nokku)");
 
-      await sock.sendMessage(jid, { text: "✅ Voice note target JID-lekk ayachu." }, { quoted: message });
+      await sock.sendMessage(
+        jid,
+        { text: "✅ 4 variant ayachu. Normal WhatsApp-il ethu play aakunnu ennu nokku." },
+        { quoted: message }
+      );
     } catch (error) {
       console.error("[GALAXY-MD] .fd failed:", error);
       await sock.sendMessage(
         jid,
-        { text: "❌ Audio ayakkan pattiyilla: " + String(error?.message || error).slice(0, 180) },
+        { text: "❌ Failed: " + String(error?.message || error).slice(0, 180) },
         { quoted: message }
       );
     } finally {
+      try { sock.ws.off("CB:ack,class:message", ackHandler); } catch {}
       try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
     }
   },
