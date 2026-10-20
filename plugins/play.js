@@ -62,13 +62,13 @@ module.exports = {
       });
 
       if (!response.ok) {
-        throw new Error("ZellRayy API returned HTTP " + response.status);
+        throw new Error("API error");
       }
 
       const result = await response.json();
 
       if (result?.status !== true || typeof result?.result?.download !== "string" || !result.result.download.trim()) {
-        throw new Error("API did not return a valid song download link.");
+        throw new Error("API error");
       }
 
       const downloadUrl = result.result.download;
@@ -87,7 +87,7 @@ module.exports = {
       });
 
       if (!downloadRes.ok || !downloadRes.body) {
-        throw new Error("MP3 download failed (HTTP " + downloadRes.status + ").");
+        throw new Error("API error");
       }
 
       await pipeline(
@@ -97,7 +97,7 @@ module.exports = {
 
       const stats = fs.statSync(tempFile);
       if (!stats.size) {
-        throw new Error("Downloaded MP3 file is empty.");
+        throw new Error("API error");
       }
 
       await editStatus("📤 Sending song...");
@@ -122,10 +122,7 @@ module.exports = {
 
     } catch (error) {
       console.error("[GALAXY-MD] .play download error:", error);
-      await editStatus(
-        "❌ Song download failed!\n" +
-        String(error?.message || error).slice(0, 180)
-      );
+      await editStatus("❌ Song download failed!\nAPI error");
     } finally {
       try {
         if (fs.existsSync(tempFile)) {
