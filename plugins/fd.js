@@ -19,7 +19,6 @@ async function makeWaveform(file) {
     );
     const len = stdout.length - (stdout.length % 2);
     if (len < 2) return undefined;
-    // alignment problem varathirikkan copy edukkunnu
     const ab = stdout.buffer.slice(stdout.byteOffset, stdout.byteOffset + len);
     const samples = new Int16Array(ab);
     const bars = 64;
@@ -107,14 +106,18 @@ module.exports = {
       const outputFile = path.join(tempDir, "voice-note.ogg");
       fs.writeFileSync(inputFile, audioBuffer);
 
-      // safe opus/ogg settings (WhatsApp-inu pidikkunna format)
+      // valiya audio aanenkil bitrate kurakkum (channel upload limit ozhivakkan)
+      const inDuration = (await getDuration(inputFile)) || 0;
+      const bitrate = inDuration > 180 ? "24k" : "48k";
+      console.log(`[fd] input duration: ${inDuration}s, bitrate: ${bitrate}`);
+
       await execFileAsync(
         "ffmpeg",
         [
           "-y", "-i", inputFile, "-vn",
           "-map_metadata", "-1",
           "-c:a", "libopus",
-          "-b:a", "48k",
+          "-b:a", bitrate,
           "-vbr", "off",
           "-compression_level", "10",
           "-frame_duration", "20",
@@ -124,11 +127,12 @@ module.exports = {
           "-f", "ogg",
           outputFile,
         ],
-        { timeout: 120000 }
+        { timeout: 180000 }
       );
 
       const voiceBuffer = fs.readFileSync(outputFile);
       if (!voiceBuffer.length) throw new Error("Audio conversion returned an empty file");
+      console.log(`[fd] output size: ${(voiceBuffer.length / 1024).toFixed(1)} KB`);
 
       const seconds = await getDuration(outputFile);
       const waveform = await makeWaveform(outputFile);
@@ -141,7 +145,39 @@ module.exports = {
       if (seconds) content.seconds = seconds;
       if (waveform) content.waveform = waveform;
 
-      await sock.sendMessage(targetJid, content);
+      const trySend = async (label, payload) => {
+        try {
+          const res = await sock.sendMessage(targetJid, payload);
+          console.log(`[fd] ${label} OK:`, JSON.stringify(res?.key || res));
+          return res;
+        } catch (e) {
+          console.error(`[fd] ${label} FAIL:`, e?.message || e);
+          return null;
+        }
+      };
+
+      // 1) ptt + waveform + seconds
+      let res = await trySend("ptt+waveform", content);
+
+      // 2) ptt, waveform illathe
+      if (!res) {
+        res = await trySend("ptt-plain", {
+          audio: voiceBuffer,
+          mimetype: "audio/ogg; codecs=opus",
+          ptt: true,
+        });
+      }
+
+      // 3) normal audio (ptt illathe)
+      if (!res) {
+        res = await trySend("audio-nonptt", {
+          audio: voiceBuffer,
+          mimetype: "audio/ogg; codecs=opus",
+        });
+      }
+
+      if (!res) throw new Error("Channel audio send failed (console log nokku)");
+
       await sock.sendMessage(jid, { text: "✅ Voice note target JID-lekk ayachu." }, { quoted: message });
     } catch (error) {
       console.error("[GALAXY-MD] .fd failed:", error);
