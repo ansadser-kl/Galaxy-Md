@@ -37,7 +37,7 @@ module.exports = {
 
       const apiUrl = "https://jerrycoder.oggyapi.workers.dev/down/ytmp3?url=" + encodeURIComponent(url);
       const response = await fetch(apiUrl, {
-        headers: { Accept: "application/json" },
+        headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
         signal: AbortSignal.timeout(60000)
       });
 
@@ -48,13 +48,28 @@ module.exports = {
         throw new Error("Could not get an MP3 download link for this video.");
       }
 
-      const download = await fetch(result.url, {
-        headers: { "User-Agent": "Mozilla/5.0", Accept: "audio/mpeg,*/*" },
-        signal: AbortSignal.timeout(300000)
-      });
+      // The provider's MP3 host may reject a plain request; try its direct link with browser-like headers.
+      let download;
+      let lastStatus = 0;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        download = await fetch(result.url, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            Accept: "audio/mpeg,audio/*;q=0.9,*/*;q=0.8",
+            Referer: "https://jerrycoder.oggyapi.workers.dev/",
+            Range: "bytes=0-"
+          },
+          redirect: "follow",
+          signal: AbortSignal.timeout(300000)
+        });
 
-      if (!download.ok || !download.body) {
-        throw new Error("MP3 download failed (HTTP " + download.status + ").");
+        if (download.ok && download.body) break;
+        lastStatus = download.status;
+        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 800));
+      }
+
+      if (!download?.ok || !download.body) {
+        throw new Error("MP3 host returned HTTP " + lastStatus + ". The API may be returning an expired/broken download link.");
       }
 
       await pipeline(Readable.fromWeb(download.body), fs.createWriteStream(tempFile));
