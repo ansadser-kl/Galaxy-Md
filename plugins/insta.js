@@ -8,7 +8,7 @@ const { pipeline } = require("stream/promises");
 
 module.exports = {
   name: "insta",
-  aliases: ["instagram", "ig"],
+  aliases: [],
   description: "Download Instagram reels and videos",
   category: "Downloader",
   async execute({ sock, jid, message, text, args }) {
