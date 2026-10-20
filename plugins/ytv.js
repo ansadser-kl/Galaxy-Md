@@ -13,6 +13,31 @@ function senderId(message, jid) {
   return message.key?.participant || message.key?.participantAlt || jid;
 }
 
+function getVideoId(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname.includes("youtu.be")) return parsed.pathname.slice(1).split("/")[0] || "Unknown";
+    if (parsed.pathname === "/watch") return parsed.searchParams.get("v") || "Unknown";
+    const match = parsed.pathname.match(/\\/(?:shorts|embed|live)\\/([^/?]+)/);
+    return match?.[1] || "Unknown";
+  } catch {
+    return "Unknown";
+  }
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return "Size unavailable";
+  const units = ["B", "KB", "MB", "GB"];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit++;
+  }
+  return size.toFixed(unit === 0 ? 0 : 2) + " " + units[unit];
+}
+
 function safeFilename(value) {
   return String(value || "youtube-video")
     .replace(/[\\/:*?"<>|]/g, "_")
@@ -61,19 +86,39 @@ module.exports = {
 
       if (data?.status !== true || !downloads.length) throw new Error("API error");
 
+      const videoId = getVideoId(url);
+      const choices = await Promise.all(downloads.map(async (item) => {
+        let size = "Size unavailable";
+        try {
+          const head = await fetch(item.url, {
+            method: "HEAD",
+            redirect: "follow",
+            headers: { "User-Agent": "Mozilla/5.0" },
+            signal: AbortSignal.timeout(8000)
+          });
+          const length = head.headers.get("content-length");
+          if (length) size = formatBytes(length);
+        } catch {}
+        return { ...item, size };
+      }));
+
       const key = jid + ":" + senderId(message, jid);
       pendingChoices.set(key, {
-        downloads,
+        downloads: choices,
         title: String(result.title || "YouTube video"),
         createdAt: Date.now(),
         statusKey: statusMessage.key
       });
 
-      const lines = downloads.map((item, index) => (index + 1) + ". " + String(item.quality || "Unknown quality"));
+      const lines = choices.map((item, index) =>
+        (index + 1) + ". " + String(item.quality || "Unknown quality") + " — " + item.size
+      );
       await sock.sendMessage(jid, {
-        text: "🎬 *" + String(result.title || "YouTube video").slice(0, 180) + "*\n\n" +
-          "Choose video quality by replying with its number:\n\n" +
-          lines.join("\n") + "\n\n⏳ Reply within 10 minutes."
+        text: "🎬 *" + String(result.title || "YouTube video").slice(0, 180) + "*\\n" +
+          "🆔 Video ID: " + videoId + "\\n\\n" +
+          "📥 *Available video qualities*\\n" + lines.join("\\n") + "\\n\\n" +
+          "Reply with the number of your preferred quality.\\n" +
+          "⏳ Selection expires in 10 minutes."
       }, { quoted: message });
 
     } catch (error) {
