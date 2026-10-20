@@ -72,7 +72,7 @@ module.exports = {
         video: { url: tempFile },
         mimetype: "video/mp4",
         fileName: filename,
-        caption: "Instagram video downloaded successfully."
+        caption: ""
       }, { quoted: message });
 
       await editStatus("Download complete!");
