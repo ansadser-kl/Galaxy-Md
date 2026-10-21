@@ -31,6 +31,42 @@ function getMessageText(message) {
   ).trim();
 }
 
+function getAutoDownloadPlugin(text, plugins) {
+  const match = String(text || "").match(/https?:\/\/[^\s<>"']+/i);
+  if (!match) return null;
+
+  const url = match[0].replace(/[),.!?\]]+$/, "");
+  let hostname;
+  try {
+    hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+
+  // YouTube stays manual: use .ytv, .video, or .yta.
+  if (hostname === "youtube.com" || hostname.endsWith(".youtube.com") ||
+      hostname === "youtu.be" || hostname === "m.youtube.com" ||
+      hostname === "music.youtube.com") {
+    return null;
+  }
+
+  const matches = [
+    { name: "insta", hosts: ["instagram.com", "instagr.am"] },
+    { name: "fb", hosts: ["facebook.com", "fb.watch", "fb.com"] },
+    { name: "tera", hosts: ["terabox.com", "1024terabox.com", "teraboxapp.com", "terabox.app", "4funbox.com"] },
+    { name: "spotify", hosts: ["open.spotify.com"] },
+  ];
+
+  for (const entry of matches) {
+    if (entry.hosts.some((host) => hostname === host || hostname.endsWith("." + host))) {
+      const plugin = plugins.find((item) => item.name.toLowerCase() === entry.name);
+      if (plugin) return { plugin, url };
+    }
+  }
+
+  return null;
+}
+
 function loadPlugins() {
   let files;
   try {
@@ -266,10 +302,37 @@ async function startBot() {
           }
 
           if (!text.startsWith(config.prefix)) {
+            let replyHandled = false;
             for (const plugin of plugins) {
               if (typeof plugin.handleReply !== "function") continue;
               const handled = await plugin.handleReply({ sock, jid, message, text, config, plugins });
-              if (handled) break;
+              if (handled) {
+                replyHandled = true;
+                break;
+              }
+            }
+            if (replyHandled) continue;
+
+            // Automatically download links supported by downloader plugins.
+            // YouTube links are intentionally excluded and remain command-based.
+            if (!message.key?.fromMe && text) {
+              const autoDownload = getAutoDownloadPlugin(text, plugins);
+              if (autoDownload) {
+                await autoDownload.plugin.execute({
+                  sock,
+                  jid,
+                  message,
+                  text: autoDownload.url,
+                  args: [autoDownload.url],
+                  query: autoDownload.url,
+                  command: autoDownload.plugin.name,
+                  config,
+                  plugins,
+                  receivedAt,
+                  isPrivileged: false,
+                  setMode: (mode) => { config.mode = mode; },
+                });
+              }
             }
             continue;
           }
