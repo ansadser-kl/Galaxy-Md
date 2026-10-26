@@ -35,7 +35,11 @@ Open `.env` and set your WhatsApp number with country code, digits only:
 
 ```env
 BOT_NUMBER="919876543210"
-OWNER_NUMBER="919876543210" # optional; defaults to BOT_NUMBER\nSUDO="919111111111,919222222222" # optional; comma-separated trusted numbers\nMODE="public" # initial mode; .mode changes are saved locally
+OWNER_NUMBER="919876543210" # optional; defaults to BOT_NUMBER
+SUDO="919111111111,919222222222" # optional; comma-separated trusted numbers
+MODE="public" # initial mode; .mode changes are saved locally
+GEMINI_API_KEY="your_gemini_api_key"
+GEMINI_MODEL="gemini-2.5-flash"
 ```
 
 Replace the example with your own number. Do not include a plus sign or spaces. `OWNER_NUMBER` is optional and controls the contact shown by `.owner`; if omitted, `BOT_NUMBER` is used. Then run:
