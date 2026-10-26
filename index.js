@@ -316,15 +316,7 @@ async function startBot() {
             }
             if (replyHandled) continue;
 
-            // Gemini Flash AI: DMs respond to readable text; groups only when this bot is an admin.
-            const aiHandled = await handleAIMessage({
-              sock, jid, message, text, config, plugins, receivedAt,
-              senderIsAdmin, botIsAdmin,
-              setMode: (mode) => { config.mode = mode; },
-            });
-            if (aiHandled) continue;
-
-            // Automatically download links supported by downloader plugins.
+            // Deterministic auto-download runs before AI so a normal reply cannot swallow a supported URL.
             // YouTube links are intentionally excluded and remain command-based.
             if (!message.key?.fromMe && text) {
               const autoDownload = getAutoDownloadPlugin(text, plugins);
@@ -343,8 +335,17 @@ async function startBot() {
                   isPrivileged: false,
                   setMode: (mode) => { config.mode = mode; },
                 });
+                continue;
               }
             }
+
+            // Gemini AI: DMs respond to readable text; groups only when this bot is an admin.
+            const aiHandled = await handleAIMessage({
+              sock, jid, message, text, config, plugins, receivedAt,
+              senderIsAdmin, botIsAdmin,
+              setMode: (mode) => { config.mode = mode; },
+            });
+            if (aiHandled) continue;
             continue;
           }
 
