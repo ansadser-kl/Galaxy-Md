@@ -4,6 +4,7 @@ require("dotenv").config();
 
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
 const pino = require("pino");
 const config = require("./config");
 const { handleAIMessage } = require("./ai-agent");
@@ -15,6 +16,96 @@ let starting = false;
 let cachedPlugins = [];
 let cachedPluginSignature = "";
 let latestVersionCache = null;
+
+function unwrapMessage(message) {
+  let current = message || {};
+  while (current.ephemeralMessage?.message || current.viewOnceMessage?.message ||
+         current.viewOnceMessageV2?.message || current.documentWithCaptionMessage?.message) {
+    current = current.ephemeralMessage?.message || current.viewOnceMessage?.message ||
+      current.viewOnceMessageV2?.message || current.documentWithCaptionMessage?.message;
+  }
+  return current;
+}
+
+function getQuotedMessage(message, jid) {
+  const msg = unwrapMessage(message?.message);
+  const contextInfo = msg?.extendedTextMessage?.contextInfo ||
+    msg?.imageMessage?.contextInfo || msg?.videoMessage?.contextInfo ||
+    msg?.documentMessage?.contextInfo || msg?.audioMessage?.contextInfo ||
+    msg?.stickerMessage?.contextInfo;
+  if (!contextInfo?.quotedMessage || !contextInfo?.stanzaId) return null;
+  return {
+    key: {
+      remoteJid: jid,
+      id: contextInfo.stanzaId,
+      participant: contextInfo.participant || undefined,
+      fromMe: false,
+    },
+    message: contextInfo.quotedMessage,
+  };
+}
+
+function isVoiceNoteRequest(text) {
+  return /(?:voice\s*note|voice\s*message|\bptt\b|\bvn\b|voice\s*note\s*aakk|voice\s*note\s*akk|vn\s*aakk|vn\s*akk|വോയ്സ്\s*നോട്ട്|വോയിസ്\s*നോട്ട്|വോയ്സ്\s*മെസേജ്|വോയിസ്\s*മെസേജ്)/i.test(String(text || ""));
+}
+
+function getAudioMedia(message) {
+  const msg = unwrapMessage(message?.message);
+  if (!msg) return null;
+  if (msg.audioMessage) return { media: msg.audioMessage, mimetype: msg.audioMessage.mimetype || "audio/ogg" };
+  if (msg.documentMessage && /^audio\//i.test(msg.documentMessage.mimetype || "")) {
+    return { media: msg.documentMessage, mimetype: msg.documentMessage.mimetype };
+  }
+  if (msg.videoMessage) return { media: msg.videoMessage, mimetype: msg.videoMessage.mimetype || "video/mp4" };
+  return null;
+}
+
+async function convertQuotedAudioToPtt({ sock, jid, message, text, downloadMediaMessage }) {
+  if (!isVoiceNoteRequest(text)) return false;
+  const quoted = getQuotedMessage(message, jid);
+  if (!quoted) return false;
+  const audio = getAudioMedia(quoted);
+  if (!audio) return false;
+
+  try {
+    if (typeof downloadMediaMessage !== "function") {
+      throw new Error("Baileys media download is unavailable in this installed version.");
+    }
+    const mediaBuffer = await downloadMediaMessage(quoted, "buffer", {}, {
+      logger: pino({ level: "silent" }),
+      reuploadRequest: sock.updateMediaMessage,
+    });
+    if (!Buffer.isBuffer(mediaBuffer) || mediaBuffer.length === 0) {
+      throw new Error("The replied audio could not be downloaded.");
+    }
+
+    // Encode the source as WhatsApp-compatible OGG/Opus PTT audio.
+    const pttBuffer = execFileSync("ffmpeg", [
+      "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+      "-vn", "-ac", "1", "-ar", "48000", "-c:a", "libopus",
+      "-b:a", "64k", "-f", "ogg", "pipe:1",
+    ], {
+      input: mediaBuffer,
+      maxBuffer: 128 * 1024 * 1024,
+      timeout: 120000,
+    });
+
+    if (!pttBuffer.length) throw new Error("Audio conversion returned an empty file.");
+    await sock.sendMessage(jid, {
+      audio: pttBuffer,
+      mimetype: "audio/ogg; codecs=opus",
+      ptt: true,
+    }, { quoted: message });
+    return true;
+  } catch (error) {
+    console.error("[GALAXY-MD] Audio-to-PTT conversion failed:", error.message || error);
+    const messageText = /ENOENT|not found|spawn ffmpeg/i.test(String(error.message || error))
+      ? "Voice note conversion-inu server-il ffmpeg install cheyyanam."
+      : "Ee audio voice note aakkan kazhinjilla. Vere audio file try cheyyu.";
+    await sock.sendMessage(jid, { text: messageText }, { quoted: message }).catch(() => {});
+    return true;
+  }
+}
 
 function getMessageText(message) {
   const msg = message && message.message;
@@ -130,6 +221,7 @@ async function startBot() {
     const Browsers = baileys.Browsers;
     const useMultiFileAuthState = baileys.useMultiFileAuthState;
     const fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
+    const downloadMediaMessage = baileys.downloadMediaMessage;
     const DisconnectReason = baileys.DisconnectReason || {};
 
     if (typeof makeWASocket !== "function" || typeof useMultiFileAuthState !== "function") {
@@ -181,7 +273,15 @@ async function startBot() {
           : ["remove", "leave", "reject"].includes(action) ? "goodbye" : "";
         const item = type && group[type];
         if (!item?.message || item.enabled === false) return;
-        const metadata = await sock.groupMetadata(update.id).catch(() => ({}));
+        const metadata = await sock.groupMetadata(update.id).catch(() => null);
+        if (!metadata) return;
+        const botNumber = String(config.botNumber || "").replace(/\D/g, "");
+        const botIds = [sock.user?.id, sock.user?.lid, botNumber ? botNumber + "@s.whatsapp.net" : ""].filter(Boolean);
+        const botParticipant = (metadata.participants || []).find((p) => participantMatches(p, botIds));
+        if (!(botParticipant?.admin || botParticipant?.superadmin)) {
+          console.warn("[GALAXY-MD] Skipping group welcome/goodbye: bot is not confirmed as a group admin.");
+          return;
+        }
         for (const participant of update.participants || []) {
           const userJid = typeof participant === "string" ? participant : (participant.id || participant.jid || "");
           if (!userJid) continue;
@@ -312,12 +412,13 @@ async function startBot() {
             senderIsAdmin = !!(participant?.admin || participant?.superadmin);
             const botParticipant = participants.find((p) => participantMatches(p, botIds));
             botIsAdmin = !!(botParticipant?.admin || botParticipant?.superadmin);
-            if (!botParticipant) {
-              console.warn("[GALAXY-MD] Bot participant was not matched in group metadata; normal group AI chat remains enabled.");
+            if (!(botParticipant?.admin || botParticipant?.superadmin)) {
+              console.warn("[GALAXY-MD] Ignoring group message: bot is not confirmed as a group admin.");
+              continue;
             }
 
             if (feature("welcome") && !message.key?.fromMe && message.messageStubType === 27) {
-              await sock.sendMessage(jid, { text: "👋 Welcome to the group!", mentions: [senderJid].filter(Boolean) }).catch(() => {});
+              await sock.sendMessage(jid, { text: "👋 Welcome to the group!", mentions: [message.key?.participant, message.key?.participantAlt].filter(Boolean) }).catch(() => {});
             }
             if (feature("antilink") && !message.key?.fromMe && !senderIsAdmin && /(?:https?:\/\/|www\.|chat\.whatsapp\.com\/|t\.me\/)/i.test(text) && botIsAdmin) {
               await sock.sendMessage(jid, { text: "⛔ Links are not allowed here. Removing the message." }).catch(() => {});
@@ -327,6 +428,11 @@ async function startBot() {
           }
 
           if (!text.startsWith(config.prefix)) {
+            const convertedToPtt = await convertQuotedAudioToPtt({
+              sock, jid, message, text, downloadMediaMessage,
+            });
+            if (convertedToPtt) continue;
+
             let replyHandled = false;
             for (const plugin of plugins) {
               if (typeof plugin.handleReply !== "function") continue;
