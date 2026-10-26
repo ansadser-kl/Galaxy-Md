@@ -32,6 +32,17 @@ function getMessageText(message) {
   ).trim();
 }
 
+function normalizeJid(value) {
+  return String(value || "").trim().toLowerCase().replace(/:\\d+(?=@)/, "");
+}
+
+function participantMatches(participant, identifiers) {
+  if (!participant) return false;
+  const participantIds = [participant.id, participant.lid, participant.jid].map(normalizeJid).filter(Boolean);
+  const wantedIds = identifiers.map(normalizeJid).filter(Boolean);
+  return participantIds.some((candidate) => wantedIds.includes(candidate));
+}
+
 function getAutoDownloadPlugin(text, plugins) {
   const match = String(text || "").match(/https?:\/\/[^\s<>"']+/i);
   if (!match) return null;
@@ -285,14 +296,25 @@ async function startBot() {
           let botIsAdmin = false;
           if (jid.endsWith("@g.us")) {
             const feature = (name) => data.features?.[jid + ":" + name] === true;
-            const senderJid = message.key?.participant || message.key?.participantAlt || "";
-            const senderNumber = String(senderJid).split("@")[0].split(":")[0].replace(/\D/g, "");
-            const botNumber = String(config.botNumber || sock.user?.id || "").split("@")[0].split(":")[0].replace(/\D/g, "");
-            const metadata = await sock.groupMetadata(jid).catch(() => null);
-            const participant = metadata?.participants?.find(p => p.id === senderJid || p.lid === senderJid || String(p.id || "").split(":")[0] === String(senderJid).split(":")[0]);
+            const senderIds = [message.key?.participant, message.key?.participantAlt].filter(Boolean);
+            const botNumber = String(config.botNumber || "").replace(/\\D/g, "");
+            const botIds = [
+              sock.user?.id,
+              sock.user?.lid,
+              botNumber ? botNumber + "@s.whatsapp.net" : "",
+            ].filter(Boolean);
+            const metadata = await sock.groupMetadata(jid).catch((error) => {
+              console.warn("[GALAXY-MD] Could not fetch group metadata:", error.message || error);
+              return null;
+            });
+            const participants = metadata?.participants || [];
+            const participant = participants.find((p) => participantMatches(p, senderIds));
             senderIsAdmin = !!(participant?.admin || participant?.superadmin);
-            const botParticipant = metadata?.participants?.find(p => p.id === sock.user?.id || p.lid === sock.user?.lid || String(p.id || "").split(":")[0] === botNumber);
+            const botParticipant = participants.find((p) => participantMatches(p, botIds));
             botIsAdmin = !!(botParticipant?.admin || botParticipant?.superadmin);
+            if (!botParticipant) {
+              console.warn("[GALAXY-MD] Bot participant was not matched in group metadata; normal group AI chat remains enabled.");
+            }
 
             if (feature("welcome") && !message.key?.fromMe && message.messageStubType === 27) {
               await sock.sendMessage(jid, { text: "👋 Welcome to the group!", mentions: [senderJid].filter(Boolean) }).catch(() => {});
