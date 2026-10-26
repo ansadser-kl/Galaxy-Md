@@ -33,7 +33,7 @@ function getMessageText(message) {
 }
 
 function normalizeJid(value) {
-  return String(value || "").trim().toLowerCase().replace(/:\\d+(?=@)/, "");
+  return String(value || "").trim().toLowerCase().replace(/:\d+(?=@)/, "");
 }
 
 function participantMatches(participant, identifiers) {
@@ -297,7 +297,7 @@ async function startBot() {
           if (jid.endsWith("@g.us")) {
             const feature = (name) => data.features?.[jid + ":" + name] === true;
             const senderIds = [message.key?.participant, message.key?.participantAlt].filter(Boolean);
-            const botNumber = String(config.botNumber || "").replace(/\\D/g, "");
+            const botNumber = String(config.botNumber || "").replace(/\D/g, "");
             const botIds = [
               sock.user?.id,
               sock.user?.lid,
