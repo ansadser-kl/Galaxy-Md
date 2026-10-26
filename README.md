@@ -14,6 +14,9 @@ A WhatsApp bot with a **Gemini Flash AI agent**, using **Baileys 7.0.0-rc14** an
 
 ## V2.0 AI Agent
 
+- Default model: `gemini-3.5-flash-lite` (override with `GEMINI_MODEL` if your AI Studio project supports another current model).
+- Language behavior: Malayalam, Manglish, English, and Hindi; AI is instructed to match the sender's language or explicit language request.
+
 - Configure `GEMINI_API_KEY` in `.env` to enable Gemini Flash replies and natural-language plugin selection.
 - In direct messages, AI responds to readable text messages from any sender.
 - In groups, AI responds only when the bot account is an admin in that group.
@@ -39,7 +42,7 @@ OWNER_NUMBER="919876543210" # optional; defaults to BOT_NUMBER
 SUDO="919111111111,919222222222" # optional; comma-separated trusted numbers
 MODE="public" # initial mode; .mode changes are saved locally
 GEMINI_API_KEY="your_gemini_api_key"
-GEMINI_MODEL="gemini-2.5-flash"
+GEMINI_MODEL="gemini-3.5-flash-lite"
 ```
 
 Replace the example with your own number. Do not include a plus sign or spaces. `OWNER_NUMBER` is optional and controls the contact shown by `.owner`; if omitted, `BOT_NUMBER` is used. Then run:
