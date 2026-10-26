@@ -1,7 +1,7 @@
 {
   "name": "galaxy-md",
-  "version": "1.0.0",
-  "description": "GALAXY-MD WhatsApp bot for Termux, VPS, and PC",
+  "version": "2.0.0",
+  "description": "GALAXY-MD V2.0 - Gemini Flash AI agent for WhatsApp, Termux, VPS, and PC",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
