@@ -17,7 +17,7 @@ const sudoNumbers = [
 module.exports = {
   botName: String(data.botName || process.env.BOT_NAME || "GALAXY-MD"),
   prefix: String(data.prefix || process.env.PREFIX || "."),
-  version: "1.0.0",
+  version: "2.0.0",
   botNumber: process.env.BOT_NUMBER || "",
   ownerNumber: String(data.ownerNumber || process.env.OWNER_NUMBER || process.env.BOT_NUMBER || ""),
   sudoNumbers: [...new Set(sudoNumbers)],
