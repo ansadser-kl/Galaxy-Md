@@ -1,6 +1,6 @@
-# GALAXY-MD 🚀
+# GALAXY-MD V2.0 🚀
 
-A WhatsApp bot using **Baileys 7.0.0-rc14** and **CommonJS .js files**, for Android Termux, VPS/cloud hosting, and PC/laptop.
+A WhatsApp bot with a **Gemini Flash AI agent**, using **Baileys 7.0.0-rc14** and **CommonJS .js files**, for Android Termux, VPS/cloud hosting, and PC/laptop.
 
 ## Features
 
@@ -11,6 +11,16 @@ A WhatsApp bot using **Baileys 7.0.0-rc14** and **CommonJS .js files**, for Andr
 - Commands loaded from individual `.js` files in `plugins/`
 - Utility commands: `.ping`, `.alive`, `.menu`, `.echo`, `.owner`, `.runtime` (`.uptime` alias), `.jid`, `.mode`
 - Group commands: `.groupinfo` (`.ginfo` alias), `.tagall` (admins only), `.promote` (admins only), `.demote` (admins only)\n- Access control: `.mode public` allows everyone to use commands; `.mode private` restricts commands to the configured bot number and `SUDO` numbers.
+
+## V2.0 AI Agent
+
+- Configure `GEMINI_API_KEY` in `.env` to enable Gemini Flash replies and natural-language plugin selection.
+- In direct messages, AI responds to readable text messages from any sender.
+- In groups, AI responds only when the bot account is an admin in that group.
+- AI can select existing plugins by their exported name/description; existing dot commands still work as before.
+- Group moderation tools remain permission-gated. Only install plugins you trust.
+- Link auto-download remains as configured in the existing core; YouTube links stay excluded from generic auto-download.
+- AI calls use Google's Gemini API and may incur API usage charges. Keep the API key private.
 
 ## Install and start
 
