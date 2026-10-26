@@ -129,8 +129,8 @@ async function handleAIMessage(context) {
   if (message?.key?.fromMe) return true;
   if (!String(text || "").trim()) return false;
 
-  // In groups, AI is enabled only while the bot account itself is an admin.
-  if (isGroup && !context.botIsAdmin) return false;
+  // Allow ordinary AI chat in groups even when bot-admin detection is unavailable.
+  // Privileged group-management plugins are still checked against sender/bot permissions below.
 
   const model = String(process.env.GEMINI_MODEL || "gemini-3.5-flash-lite").trim();
   try {
