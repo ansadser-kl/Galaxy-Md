@@ -58,7 +58,7 @@ async function askGemini({ apiKey, model, text, plugins, isGroup, botIsAdmin }) 
     '{"type":"tool","name":"exact_plugin_name","args":"arguments to pass after the command"}',
     "Only choose a plugin whose exact name appears in the supplied plugin list. Never invent a plugin or claim an action succeeded unless the tool was executed.",
     "If a URL is present, select a plugin that supports that platform if one exists. Never select a YouTube downloader unless a matching plugin is listed. If no tool supports the request, explain that briefly.",
-    "For ordinary questions, chat, translation, coding help, and general knowledge, reply in the user's language (Malayalam/Manglish when they use it).",
+    "For ordinary questions, chat, translation, coding help, and general knowledge, reply only in the language used or explicitly requested by the user. Supported languages: Malayalam (മലയാളം script), Manglish (Malayalam written in Latin letters), English, and Hindi (हिन्दी script). Match the user's current message language; do not randomly switch languages.",
     "Do not ask for command syntax if a natural-language request can be mapped to a listed plugin.",
     "For group moderation or other privileged actions, request authorization in your reply instead of trying to bypass access controls.",
     "Context: " + (isGroup ? "WhatsApp group; bot admin status is " + (botIsAdmin ? "admin" : "not admin") + "." : "direct message."),
@@ -98,7 +98,7 @@ async function handleAIMessage(context) {
   // AI is enabled in groups only while the bot account itself is a group admin.
   if (isGroup && !context.botIsAdmin) return false;
 
-  const model = String(process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
+  const model = String(process.env.GEMINI_MODEL || "gemini-3.5-flash-lite").trim();
   try {
     const result = await askGemini({
       apiKey,
