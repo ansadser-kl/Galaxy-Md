@@ -6,6 +6,7 @@ const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
 const config = require("./config");
+const { handleAIMessage } = require("./ai-agent");
 
 const SESSION_DIR = path.join(__dirname, "session");
 const PLUGINS_DIR = path.join(__dirname, "plugins");
@@ -280,6 +281,8 @@ async function startBot() {
           try { data = JSON.parse(fs.readFileSync(dataFile, "utf8")); } catch {}
 
           // Group automation and moderation are handled for ordinary messages too.
+          let senderIsAdmin = false;
+          let botIsAdmin = false;
           if (jid.endsWith("@g.us")) {
             const feature = (name) => data.features?.[jid + ":" + name] === true;
             const senderJid = message.key?.participant || message.key?.participantAlt || "";
@@ -287,9 +290,9 @@ async function startBot() {
             const botNumber = String(config.botNumber || sock.user?.id || "").split("@")[0].split(":")[0].replace(/\D/g, "");
             const metadata = await sock.groupMetadata(jid).catch(() => null);
             const participant = metadata?.participants?.find(p => p.id === senderJid || p.lid === senderJid || String(p.id || "").split(":")[0] === String(senderJid).split(":")[0]);
-            const senderIsAdmin = !!(participant?.admin || participant?.superadmin);
+            senderIsAdmin = !!(participant?.admin || participant?.superadmin);
             const botParticipant = metadata?.participants?.find(p => p.id === sock.user?.id || p.lid === sock.user?.lid || String(p.id || "").split(":")[0] === botNumber);
-            const botIsAdmin = !!(botParticipant?.admin || botParticipant?.superadmin);
+            botIsAdmin = !!(botParticipant?.admin || botParticipant?.superadmin);
 
             if (feature("welcome") && !message.key?.fromMe && message.messageStubType === 27) {
               await sock.sendMessage(jid, { text: "👋 Welcome to the group!", mentions: [senderJid].filter(Boolean) }).catch(() => {});
@@ -312,6 +315,14 @@ async function startBot() {
               }
             }
             if (replyHandled) continue;
+
+            // Gemini Flash AI: DMs respond to readable text; groups only when this bot is an admin.
+            const aiHandled = await handleAIMessage({
+              sock, jid, message, text, config, plugins, receivedAt,
+              senderIsAdmin, botIsAdmin,
+              setMode: (mode) => { config.mode = mode; },
+            });
+            if (aiHandled) continue;
 
             // Automatically download links supported by downloader plugins.
             // YouTube links are intentionally excluded and remain command-based.
@@ -399,7 +410,7 @@ process.on("uncaughtException", (error) => console.error("[GALAXY-MD] Uncaught e
 
 console.log([
   "╔══════════════════════════════╗",
-  "║        GALAXY-MD v1.0.0      ║",
+  "║        GALAXY-MD v2.0.0      ║",
   "║    CommonJS • Baileys 7 RC14 ║",
   "╚══════════════════════════════╝",
 ].join("\n"));
