@@ -28,9 +28,16 @@ function isTrusted({ message, config }) {
   return allowed.some((item) => number && (number === item || number.endsWith(item) || item.endsWith(number)));
 }
 
+function pluginNames(plugin) {
+  return [plugin.name, ...(Array.isArray(plugin.aliases) ? plugin.aliases : [])].join(" ");
+}
+
 function needsGroupAdmin(plugin) {
-  const names = [plugin.name, ...(Array.isArray(plugin.aliases) ? plugin.aliases : [])].join(" ");
-  return /(^|[^a-z])(kick|ban|promote|demote|tagall|delete|purge|antilink|mode|sudo|restart|leave|block|unblock)([^a-z]|$)/i.test(names);
+  return /(^|[^a-z])(kick|ban|promote|demote|tagall|delete|purge|antilink|leave|block|unblock)([^a-z]|$)/i.test(pluginNames(plugin));
+}
+
+function needsOwner(plugin) {
+  return /(^|[^a-z])(mode|sudo|restart|logout|eval|shell|exec|broadcast)([^a-z]|$)/i.test(pluginNames(plugin));
 }
 
 function toolList(plugins) {
@@ -111,6 +118,10 @@ async function handleAIMessage(context) {
       }
 
       const trusted = isTrusted({ message, config });
+      if (needsOwner(plugin) && !trusted) {
+        await sock.sendMessage(jid, { text: "Ee bot-control action owner/SUDO users maathram cheyyam." }, { quoted: message });
+        return true;
+      }
       if (needsGroupAdmin(plugin) && isGroup && !context.senderIsAdmin && !trusted) {
         await sock.sendMessage(jid, { text: "Ee group-management action cheyyan group admin permission venam." }, { quoted: message });
         return true;
