@@ -10,10 +10,7 @@ function messageText(result) {
 }
 
 function cleanJson(text) {
-  const value = String(text || "").trim()
-    .replace(/^\`\`\`(?:json)?\s*/i, "")
-    .replace(/\s*\`\`\`$/, "");
-  return JSON.parse(value);
+  return JSON.parse(String(text || "").trim());
 }
 
 function normalNumber(value) {
