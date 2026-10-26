@@ -1,0 +1,25 @@
+name: Node.js syntax check
+
+on:
+  push:
+    branches: ["main", "galaxy-md-v2-ai"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check core JavaScript syntax
+        run: |
+          node --check index.js
+          node --check ai-agent.js
+          node --check config.js
+          for file in plugins/*.js; do
+            [ -f "$file" ] || continue
+            node --check "$file"
+          done
