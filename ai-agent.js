@@ -127,10 +127,9 @@ async function handleAIMessage(context) {
   const { sock, jid, message, text, config, plugins } = context;
   const isGroup = String(jid || "").endsWith("@g.us");
   if (message?.key?.fromMe) return true;
+  // Fail closed: the bot must be positively identified as a group admin before any group AI reply.
+  if (isGroup && !context.botIsAdmin) return true;
   if (!String(text || "").trim()) return false;
-
-  // Allow ordinary AI chat in groups even when bot-admin detection is unavailable.
-  // Privileged group-management plugins are still checked against sender/bot permissions below.
 
   const model = String(process.env.GEMINI_MODEL || "gemini-3.5-flash-lite").trim();
   try {
