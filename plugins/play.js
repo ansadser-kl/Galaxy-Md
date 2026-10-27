@@ -47,8 +47,8 @@ module.exports = {
         { quoted: message }
       );
 
-      const apiUrl = new URL("https://api.nexray.eu.cc/downloader/ytplay");
-      apiUrl.searchParams.set("q", query);
+      const apiUrl = new URL("https://api-faa.my.id/faa/ytplay");
+      apiUrl.searchParams.set("query", query);
 
       const response = await fetch(apiUrl, {
         headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
@@ -59,23 +59,26 @@ module.exports = {
 
       const payload = await response.json();
       const result = payload?.result;
+
       if (payload?.status !== true ||
-          typeof result?.download_url !== "string" ||
-          !/^https?:\/\//i.test(result.download_url)) {
+          typeof result?.mp3 !== "string" ||
+          !/^https?:\/\//i.test(result.mp3)) {
         throw new Error("API error");
       }
 
       const title = String(result.title || query).trim().slice(0, 180);
-      const description = String(result.description || "").trim().slice(0, 500);
-      const channel = String(result.channel || "").trim().slice(0, 100);
-      const duration = String(result.duration || "").trim();
+      const channel = String(result.author || "").trim().slice(0, 100);
+      const duration = String(result.duration_timestamp || result.duration || "").trim();
       const sourceUrl = typeof result.url === "string" && /^https?:\/\//i.test(result.url)
         ? result.url
+        : "";
+      const thumbnail = typeof result.thumbnail === "string" && /^https?:\/\//i.test(result.thumbnail)
+        ? result.thumbnail
         : "";
 
       await editStatus("⬇️ Downloading MP3...");
 
-      const downloadResponse = await fetch(result.download_url, {
+      const downloadResponse = await fetch(result.mp3, {
         headers: {
           "User-Agent": "Mozilla/5.0",
           Accept: "audio/mpeg,audio/*;q=0.9,*/*;q=0.8"
@@ -102,14 +105,6 @@ module.exports = {
         .trim()
         .slice(0, 100) || "song";
 
-      const caption = [
-        "🎵 *" + title + "*",
-        channel ? "🎤 " + channel : "",
-        duration ? "⏱️ " + duration : "",
-        sourceUrl ? "🔗 " + sourceUrl : "",
-        description
-      ].filter(Boolean).join("\n");
-
       await sock.sendMessage(
         jid,
         {
@@ -117,12 +112,12 @@ module.exports = {
           mimetype: "audio/mpeg",
           fileName: safeTitle + ".mp3",
           ptt: false,
-          ...(result.thumbnail && /^https?:\/\//i.test(result.thumbnail)
+          ...(thumbnail
             ? { contextInfo: { externalAdReply: {
                 title: title.slice(0, 100),
                 body: channel || "YouTube",
                 mediaType: 1,
-                thumbnailUrl: result.thumbnail,
+                thumbnailUrl: thumbnail,
                 sourceUrl: sourceUrl || undefined,
                 renderLargerThumbnail: false
               } } }
