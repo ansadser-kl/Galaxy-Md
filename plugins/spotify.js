@@ -19,7 +19,7 @@ function safeFilename(value) {
 module.exports = {
   name: "spotify",
   aliases: ["spotifyplay"],
-  description: "Search and download Spotify tracks, or download from a Spotify link",
+  description: "Search and download Spotify tracks as plain MP3 audio",
   category: "Downloader",
 
   async execute({ sock, jid, message, text, args }) {
@@ -28,16 +28,14 @@ module.exports = {
       return sock.sendMessage(
         jid,
         {
-          text: "🎵 *Spotify Downloader*\n\n• Search: .spotify Arz Kiya Hai\n• Link: .spotify https://open.spotify.com/track/xxxxx"
+          text: "*Spotify Downloader*\n\n• Search: .spotify Arz Kiya Hai\n• Link: .spotify https://open.spotify.com/track/xxxxx"
         },
         { quoted: message }
       );
     }
 
     const spotifyUrl = input.match(/https?:\/\/\S+/i)?.[0]?.replace(/[)>.,]+$/, "");
-    const isSpotifyLink = Boolean(
-      spotifyUrl && /(?:open\.)?spotify\.com\//i.test(spotifyUrl)
-    );
+    const isSpotifyLink = Boolean(spotifyUrl && /(?:open\.)?spotify\.com\//i.test(spotifyUrl));
 
     if (spotifyUrl && !isSpotifyLink) {
       return sock.sendMessage(
@@ -53,9 +51,13 @@ module.exports = {
     );
     let statusMessage;
 
-    const editStatus = async (status) => {
-      if (statusMessage?.key) {
-        await sock.sendMessage(jid, { text: status, edit: statusMessage.key });
+    const editStatus = async status => {
+      try {
+        if (statusMessage?.key) {
+          await sock.sendMessage(jid, { text: status, edit: statusMessage.key });
+        }
+      } catch (error) {
+        console.warn("[GALAXY-MD] Failed to edit Spotify status:", error?.message);
       }
     };
 
@@ -66,59 +68,45 @@ module.exports = {
         { quoted: message }
       );
 
-      let apiUrl;
-      if (isSpotifyLink) {
-        apiUrl = new URL(API_BASE + "/spotify");
-        apiUrl.searchParams.set("url", spotifyUrl);
-      } else {
-        apiUrl = new URL(API_BASE + "/spotifyplay");
-        apiUrl.searchParams.set("q", input);
-      }
+      const apiUrl = new URL(API_BASE + (isSpotifyLink ? "/spotify" : "/spotifyplay"));
+      apiUrl.searchParams.set(isSpotifyLink ? "url" : "q", isSpotifyLink ? spotifyUrl : input);
 
       const apiResponse = await fetch(apiUrl, {
-        headers: { "User-Agent": "Mozilla/5.0" },
+        headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
         signal: AbortSignal.timeout(60000)
       });
-
-      if (!apiResponse.ok) {
-        throw new Error("Spotify API returned HTTP " + apiResponse.status);
-      }
+      if (!apiResponse.ok) throw new Error("API error");
 
       const payload = await apiResponse.json();
-      if (payload?.status !== true || !payload?.result) {
-        throw new Error("Spotify API did not return a track.");
-      }
+      const track = payload?.result;
+      if (payload?.status !== true || !track) throw new Error("API error");
 
-      const track = payload.result;
+      // Search response uses download_url; link response uses result.url as the direct audio URL.
       const downloadUrl = isSpotifyLink ? track.url : track.download_url;
-
       if (typeof downloadUrl !== "string" || !/^https?:\/\//i.test(downloadUrl)) {
-        throw new Error("Spotify did not return a valid download URL.");
+        throw new Error("API error");
       }
 
-      const title = String(track.title || track.name || input);
-      const artist = String(track.artist || "");
-      await editStatus("Downloading: " + title);
+      const title = String(track.title || track.name || input).trim().slice(0, 180);
+      await editStatus("Downloading MP3...");
 
       const downloadResponse = await fetch(downloadUrl, {
-        headers: { "User-Agent": "Mozilla/5.0", "Accept": "audio/*,*/*;q=0.8" },
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          Accept: "audio/mpeg,audio/*;q=0.9,*/*;q=0.8"
+        },
         signal: AbortSignal.timeout(300000),
         redirect: "follow"
       });
-
-      if (!downloadResponse.ok || !downloadResponse.body) {
-        throw new Error("Audio download failed (HTTP " + downloadResponse.status + ").");
-      }
+      if (!downloadResponse.ok || !downloadResponse.body) throw new Error("API error");
 
       await pipeline(
         Readable.fromWeb(downloadResponse.body),
         fs.createWriteStream(tempFile)
       );
+      if (!fs.statSync(tempFile).size) throw new Error("API error");
 
-      const stats = fs.statSync(tempFile);
-      if (!stats.size) throw new Error("Downloaded audio file is empty.");
-
-      await editStatus("Sending audio...");
+      await editStatus("Sending MP3 file...");
 
       await sock.sendMessage(
         jid,
@@ -126,32 +114,15 @@ module.exports = {
           audio: { url: tempFile },
           mimetype: "audio/mpeg",
           fileName: safeFilename(title) + ".mp3",
-          ptt: false,
-          contextInfo: {
-            externalAdReply: {
-              title: title.slice(0, 100),
-              body: artist.slice(0, 100) || "Spotify",
-              ...(track.thumbnail ? { thumbnailUrl: track.thumbnail } : {}),
-              mediaType: 2,
-              sourceUrl: isSpotifyLink ? spotifyUrl : (track.url && /^https?:\/\//i.test(track.url) ? track.url : "https://open.spotify.com/")
-            }
-          }
+          ptt: false
         },
         { quoted: message }
       );
 
-      await editStatus("✅ Download complete: " + title + (artist ? "\nArtist: " + artist : ""));
+      await editStatus("Spotify MP3 sent successfully!");
     } catch (error) {
       console.error("[GALAXY-MD] Spotify download failed:", error?.message || error);
-      try {
-        await editStatus("❌ Spotify download failed. The API may be unavailable or the track could not be downloaded. Please try again.");
-      } catch {
-        await sock.sendMessage(
-          jid,
-          { text: "❌ Spotify download failed. Please try again later." },
-          { quoted: message }
-        );
-      }
+      await editStatus("Spotify download failed.\nAPI error");
     } finally {
       try { fs.unlinkSync(tempFile); } catch {}
     }
