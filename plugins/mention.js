@@ -18,16 +18,29 @@ function digits(value) {
   return String(value || "").split("@")[0].split(":")[0].replace(/\D/g, "");
 }
 
-function getMentionedJids(message) {
-  const msg = message?.message || {};
-  const context =
-    msg.extendedTextMessage?.contextInfo ||
+function unwrapMessage(message) {
+  let current = message || {};
+  while (current.ephemeralMessage?.message ||
+         current.viewOnceMessage?.message ||
+         current.viewOnceMessageV2?.message ||
+         current.documentWithCaptionMessage?.message) {
+    current = current.ephemeralMessage?.message ||
+      current.viewOnceMessage?.message ||
+      current.viewOnceMessageV2?.message ||
+      current.documentWithCaptionMessage?.message;
+  }
+  return current;
+}
+
+function getMentionContext(message) {
+  const msg = unwrapMessage(message?.message);
+  return msg.extendedTextMessage?.contextInfo ||
     msg.imageMessage?.contextInfo ||
     msg.videoMessage?.contextInfo ||
     msg.documentMessage?.contextInfo ||
     msg.audioMessage?.contextInfo ||
-    msg.stickerMessage?.contextInfo;
-  return context?.mentionedJid || [];
+    msg.stickerMessage?.contextInfo ||
+    null;
 }
 
 async function fetchBuffer(url) {
@@ -54,8 +67,13 @@ module.exports = {
     const targets = [...new Set(sudoNumbers)];
     if (!targets.length) return false;
 
-    const mentionedJids = getMentionedJids(message);
+    const context = getMentionContext(message);
+    const mentionedJids = (context?.mentionedJid || []).map((value) => String(value || "").toLowerCase());
     const mentionedNumbers = mentionedJids.map(digits).filter(Boolean);
+    const botJids = [sock.user?.id, sock.user?.lid]
+      .map((value) => String(value || "").toLowerCase().replace(/:\\d+(?=@)/, ""))
+      .filter(Boolean);
+    const directBotMention = mentionedJids.some((jid) => botJids.includes(jid));
     const textMatches = targets.some((number) =>
       String(text || "").includes("@" + number)
     );
@@ -65,7 +83,7 @@ module.exports = {
       )
     );
 
-    if (!textMatches && !jidMatches) return false;
+    if (!textMatches && !jidMatches && !directBotMention) return false;
 
     try {
       const audioUrl = AUDIOS[Math.floor(Math.random() * AUDIOS.length)];
