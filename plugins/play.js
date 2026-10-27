@@ -9,7 +9,7 @@ const { pipeline } = require("stream/promises");
 module.exports = {
   name: "play",
   aliases: ["song"],
-  description: "Search YouTube and download a song as MP3",
+  description: "Search YouTube and send an MP3 audio file",
   category: "Downloader",
 
   async execute({ sock, jid, message, text, args }) {
@@ -18,7 +18,7 @@ module.exports = {
     if (!query) {
       return sock.sendMessage(
         jid,
-        { text: "🎵 *Play / Song*\n\nEnter a song name.\nExample: .play Varnajaalam\nAlias: .song Varnajaalam" },
+        { text: "*Play / Song*\n\nEnter a song name.\nExample: .play Varnajaalam\nAlias: .song Varnajaalam" },
         { quoted: message }
       );
     }
@@ -43,7 +43,7 @@ module.exports = {
     try {
       statusMessage = await sock.sendMessage(
         jid,
-        { text: "🎵 Searching for the song..." },
+        { text: "Searching..." },
         { quoted: message }
       );
 
@@ -54,12 +54,10 @@ module.exports = {
         headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
         signal: AbortSignal.timeout(60000)
       });
-
       if (!response.ok) throw new Error("API error");
 
       const payload = await response.json();
       const result = payload?.result;
-
       if (payload?.status !== true ||
           typeof result?.mp3 !== "string" ||
           !/^https?:\/\//i.test(result.mp3)) {
@@ -67,16 +65,8 @@ module.exports = {
       }
 
       const title = String(result.title || query).trim().slice(0, 180);
-      const channel = String(result.author || "").trim().slice(0, 100);
-      const duration = String(result.duration_timestamp || result.duration || "").trim();
-      const sourceUrl = typeof result.url === "string" && /^https?:\/\//i.test(result.url)
-        ? result.url
-        : "";
-      const thumbnail = typeof result.thumbnail === "string" && /^https?:\/\//i.test(result.thumbnail)
-        ? result.thumbnail
-        : "";
 
-      await editStatus("⬇️ Downloading MP3...");
+      await editStatus("Downloading MP3...");
 
       const downloadResponse = await fetch(result.mp3, {
         headers: {
@@ -86,7 +76,6 @@ module.exports = {
         redirect: "follow",
         signal: AbortSignal.timeout(300000)
       });
-
       if (!downloadResponse.ok || !downloadResponse.body) throw new Error("API error");
 
       await pipeline(
@@ -94,10 +83,9 @@ module.exports = {
         fs.createWriteStream(tempFile)
       );
 
-      const stats = fs.statSync(tempFile);
-      if (!stats.size) throw new Error("API error");
+      if (!fs.statSync(tempFile).size) throw new Error("API error");
 
-      await editStatus("📤 Sending song...");
+      await editStatus("Sending MP3 file...");
 
       const safeTitle = title
         .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
@@ -105,31 +93,22 @@ module.exports = {
         .trim()
         .slice(0, 100) || "song";
 
+      // Send only the audio file: no thumbnail, externalAdReply, title caption, or link preview.
       await sock.sendMessage(
         jid,
         {
           audio: { url: tempFile },
           mimetype: "audio/mpeg",
           fileName: safeTitle + ".mp3",
-          ptt: false,
-          ...(thumbnail
-            ? { contextInfo: { externalAdReply: {
-                title: title.slice(0, 100),
-                body: channel || "YouTube",
-                mediaType: 1,
-                thumbnailUrl: thumbnail,
-                sourceUrl: sourceUrl || undefined,
-                renderLargerThumbnail: false
-              } } }
-            : {})
+          ptt: false
         },
         { quoted: message }
       );
 
-      await editStatus("✅ Song sent successfully!");
+      await editStatus("Song sent successfully!");
     } catch (error) {
       console.error("[GALAXY-MD] play download failed:", error?.message || error);
-      await editStatus("❌ Song download failed!\nAPI error");
+      await editStatus("Song download failed!\nAPI error");
     } finally {
       try {
         if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
