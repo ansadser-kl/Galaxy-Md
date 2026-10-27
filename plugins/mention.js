@@ -18,79 +18,98 @@ function digits(value) {
   return String(value || "").split("@")[0].split(":")[0].replace(/\D/g, "");
 }
 
+function normalizeJid(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/:\d+(?=@)/, "");
+}
+
 function unwrapMessage(message) {
   let current = message || {};
-  while (current.ephemeralMessage?.message ||
-         current.viewOnceMessage?.message ||
-         current.viewOnceMessageV2?.message ||
-         current.documentWithCaptionMessage?.message) {
-    current = current.ephemeralMessage?.message ||
+  for (let i = 0; i < 6; i++) {
+    const next = current.ephemeralMessage?.message ||
       current.viewOnceMessage?.message ||
       current.viewOnceMessageV2?.message ||
+      current.viewOnceMessageV2Extension?.message ||
       current.documentWithCaptionMessage?.message;
+    if (!next) break;
+    current = next;
   }
   return current;
 }
 
-function getMentionContext(message) {
+function getMentionContexts(message) {
   const msg = unwrapMessage(message?.message);
-  return msg.extendedTextMessage?.contextInfo ||
-    msg.imageMessage?.contextInfo ||
-    msg.videoMessage?.contextInfo ||
-    msg.documentMessage?.contextInfo ||
-    msg.audioMessage?.contextInfo ||
-    msg.stickerMessage?.contextInfo ||
-    null;
+  const candidates = [
+    msg.extendedTextMessage?.contextInfo,
+    msg.imageMessage?.contextInfo,
+    msg.videoMessage?.contextInfo,
+    msg.documentMessage?.contextInfo,
+    msg.audioMessage?.contextInfo,
+    msg.stickerMessage?.contextInfo,
+    msg.buttonsResponseMessage?.contextInfo,
+    msg.templateButtonReplyMessage?.contextInfo,
+    msg.messageContextInfo,
+  ];
+  return candidates.filter(Boolean);
 }
 
 async function fetchBuffer(url) {
   const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
   if (!response.ok) throw new Error("Media fetch failed with status " + response.status);
-  return Buffer.from(await response.arrayBuffer());
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (!buffer.length) throw new Error("Media fetch returned an empty file");
+  return buffer;
 }
 
 module.exports = {
   name: "mention",
   aliases: [],
-  description: "Play a random configured audio when the bot or SUDO is mentioned",
+  description: "Send random voice-note audio with thumbnail when the bot is mentioned",
   async execute() {},
 
   async handleMessage({ sock, jid, message, text, config }) {
-    if (message?.key?.fromMe) return false;
+    if (message?.key?.fromMe || !jid?.endsWith("@g.us")) return false;
 
-    const sudoNumbers = (config.sudoNumbers || [])
-      .map(digits)
-      .filter(Boolean);
-    const botNumber = digits(config.botNumber);
-    if (botNumber) sudoNumbers.push(botNumber);
+    const configuredNumbers = [
+      config.botNumber,
+      ...(Array.isArray(config.sudoNumbers) ? config.sudoNumbers : []),
+    ].map(digits).filter(Boolean);
 
-    const targets = [...new Set(sudoNumbers)];
-    if (!targets.length) return false;
+    const botJids = [
+      sock.user?.id,
+      sock.user?.lid,
+      ...configuredNumbers.map((number) => number + "@s.whatsapp.net"),
+    ].map(normalizeJid).filter(Boolean);
 
-    const context = getMentionContext(message);
-    const mentionedJids = (context?.mentionedJid || []).map((value) => String(value || "").toLowerCase());
+    const contexts = getMentionContexts(message);
+    const mentionedJids = contexts.flatMap((context) =>
+      Array.isArray(context.mentionedJid) ? context.mentionedJid : []
+    ).map(normalizeJid).filter(Boolean);
+
     const mentionedNumbers = mentionedJids.map(digits).filter(Boolean);
-    const botJids = [sock.user?.id, sock.user?.lid]
-      .map((value) => String(value || "").toLowerCase().replace(/:\\d+(?=@)/, ""))
-      .filter(Boolean);
-    const directBotMention = mentionedJids.some((jid) => botJids.includes(jid));
-    const textMatches = targets.some((number) =>
-      String(text || "").includes("@" + number)
+    const targets = new Set(configuredNumbers);
+    const directJidMatch = mentionedJids.some((mentioned) => botJids.includes(mentioned));
+    const numberMatch = mentionedNumbers.some((mentioned) =>
+      [...targets].some((target) => mentioned === target || mentioned.endsWith(target) || target.endsWith(mentioned))
     );
-    const jidMatches = targets.some((number) =>
-      mentionedNumbers.some((mentioned) =>
-        mentioned === number || mentioned.endsWith(number) || number.endsWith(mentioned)
-      )
-    );
+    const textMatch = [...targets].some((number) => String(text || "").includes("@" + number));
+    const isMentioned = directJidMatch || numberMatch || textMatch;
 
-    if (!textMatches && !jidMatches && !directBotMention) return false;
+    if (!isMentioned) return false;
+
+    console.log("[GALAXY-MD] Bot mention detected; preparing audio reply.");
 
     try {
       const audioUrl = AUDIOS[Math.floor(Math.random() * AUDIOS.length)];
       const imageUrl = IMAGES[Math.floor(Math.random() * IMAGES.length)];
       const [audio, thumbnail] = await Promise.all([
         fetchBuffer(audioUrl),
-        fetchBuffer(imageUrl).catch(() => null),
+        fetchBuffer(imageUrl).catch((error) => {
+          console.warn("[GALAXY-MD] Mention thumbnail unavailable:", error.message || error);
+          return null;
+        }),
       ]);
 
       await sock.sendMessage(jid, {
@@ -111,9 +130,11 @@ module.exports = {
           },
         },
       }, { quoted: message });
+
+      console.log("[GALAXY-MD] Mention audio sent successfully.");
       return true;
     } catch (error) {
-      console.error("[GALAXY-MD] Mention audio plugin failed:", error.message || error);
+      console.error("[GALAXY-MD] Mention audio plugin failed:", error.stack || error);
       return false;
     }
   },
