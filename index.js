@@ -444,6 +444,18 @@ async function startBot() {
             }
             if (replyHandled) continue;
 
+            // Run passive message plugins (for example, the SUDO/bot mention audio response).
+            let passivePluginHandled = false;
+            for (const plugin of plugins) {
+              if (typeof plugin.handleMessage !== "function") continue;
+              const handled = await plugin.handleMessage({ sock, jid, message, text, config, plugins });
+              if (handled) {
+                passivePluginHandled = true;
+                break;
+              }
+            }
+            if (passivePluginHandled) continue;
+
             // Deterministic auto-download runs before AI so a normal reply cannot swallow a supported URL.
             // YouTube links are intentionally excluded and remain command-based.
             if (!message.key?.fromMe && text) {
