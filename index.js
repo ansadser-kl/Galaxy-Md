@@ -387,6 +387,21 @@ async function startBot() {
           if (!jid || jid === "status@broadcast") continue;
 
           const text = getMessageText(message);
+
+          // Mention audio is passive and must work even when the bot is not a group admin.
+          // Run it before group metadata/admin checks so admin status cannot block this feature.
+          if (jid.endsWith("@g.us") && !message.key?.fromMe && !text.startsWith(config.prefix)) {
+            const mentionPlugin = plugins.find((plugin) =>
+              plugin.name === "mention" && typeof plugin.handleMessage === "function"
+            );
+            if (mentionPlugin) {
+              const mentionHandled = await mentionPlugin.handleMessage({
+                sock, jid, message, text, config, plugins,
+              });
+              if (mentionHandled) continue;
+            }
+          }
+
           const dataFile = path.join(__dirname, "galaxy-data.json");
           let data = {};
           try { data = JSON.parse(fs.readFileSync(dataFile, "utf8")); } catch {}
@@ -413,19 +428,9 @@ async function startBot() {
             const botParticipant = participants.find((p) => participantMatches(p, botIds));
             botIsAdmin = !!(botParticipant?.admin || botParticipant?.superadmin);
             if (!(botParticipant?.admin || botParticipant?.superadmin)) {
-              // Permit the passive mention-audio plugin even if Baileys cannot
-              // match the bot's PN/LID participant entry. Keep all other group
-              // processing behind the existing admin guard.
-              console.warn("[GALAXY-MD] Bot admin status not confirmed; checking mention plugin only.");
-              if (!text.startsWith(config.prefix)) {
-                let mentionHandled = false;
-                for (const plugin of plugins) {
-                  if (plugin.name !== "mention" || typeof plugin.handleMessage !== "function") continue;
-                  mentionHandled = !!(await plugin.handleMessage({ sock, jid, message, text, config, plugins }));
-                  if (mentionHandled) break;
-                }
-                if (mentionHandled) continue;
-              }
+              // Mention audio has already been checked above. Other group features
+              // remain behind the existing admin-status guard.
+              console.warn("[GALAXY-MD] Bot admin status not confirmed; skipping admin-only group processing.");
               continue;
             }
 
