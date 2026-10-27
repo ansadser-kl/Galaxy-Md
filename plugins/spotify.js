@@ -133,7 +133,7 @@ module.exports = {
               body: artist.slice(0, 100) || "Spotify",
               ...(track.thumbnail ? { thumbnailUrl: track.thumbnail } : {}),
               mediaType: 2,
-              sourceUrl: track.url && /^https?:\/\//i.test(track.url) ? track.url : (isSpotifyLink ? spotifyUrl : "https://open.spotify.com/")
+              sourceUrl: isSpotifyLink ? spotifyUrl : (track.url && /^https?:\/\//i.test(track.url) ? track.url : "https://open.spotify.com/")
             }
           }
         },
