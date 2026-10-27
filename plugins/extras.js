@@ -23,7 +23,7 @@ module.exports = {
   aliases: [
     "admins", "getjids", "setprefix", "antilink",
     "setvideo", "setimage", "setbot", "setowner", "setsudo", "getsudo",
-    "delsudo", "reboot", "forward", "send", "vn", "url"
+    "delsudo", "reboot", "forward", "send", "vn"
   ],
   description: "GALAXY-MD utility, moderation and owner controls",
   async execute({ sock, jid, message, query, command, config, isPrivileged, args, plugins }) {
@@ -142,6 +142,5 @@ module.exports = {
       }
       return;
     }
-    if (command === "url") return reply("The .url upload command will be added with the downloader commands, as requested.");
   }
 };
