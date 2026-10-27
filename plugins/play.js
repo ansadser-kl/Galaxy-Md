@@ -9,7 +9,7 @@ const { pipeline } = require("stream/promises");
 module.exports = {
   name: "play",
   aliases: ["song"],
-  description: "Search and download a song as MP3",
+  description: "Search YouTube and download a song as MP3",
   category: "Downloader",
 
   async execute({ sock, jid, message, text, args }) {
@@ -18,7 +18,7 @@ module.exports = {
     if (!query) {
       return sock.sendMessage(
         jid,
-        { text: "Please enter a song name!\nExample: .play Varnajaalam betleham\nAlias: .song <song name>" },
+        { text: "🎵 *Play / Song*\n\nEnter a song name.\nExample: .play Varnajaalam\nAlias: .song Varnajaalam" },
         { quoted: message }
       );
     }
@@ -30,17 +30,13 @@ module.exports = {
     );
 
     let statusMessage;
-
-    const editStatus = async (status) => {
+    const editStatus = async status => {
       try {
         if (statusMessage?.key) {
-          await sock.sendMessage(jid, {
-            text: status,
-            edit: statusMessage.key
-          });
+          await sock.sendMessage(jid, { text: status, edit: statusMessage.key });
         }
-      } catch (err) {
-        console.warn("[GALAXY-MD] Failed to edit song status:", err?.message);
+      } catch (error) {
+        console.warn("[GALAXY-MD] Failed to edit play status:", error?.message);
       }
     };
 
@@ -51,61 +47,68 @@ module.exports = {
         { quoted: message }
       );
 
-      const apiUrl = "https://zellrayy.com/download/ytplaymusic/v2?q=" + encodeURIComponent(query);
+      const apiUrl = new URL("https://api.nexray.eu.cc/downloader/ytplay");
+      apiUrl.searchParams.set("q", query);
+
       const response = await fetch(apiUrl, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "Mozilla/5.0"
-        },
+        headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
         signal: AbortSignal.timeout(60000)
       });
 
-      if (!response.ok) {
+      if (!response.ok) throw new Error("API error");
+
+      const payload = await response.json();
+      const result = payload?.result;
+      if (payload?.status !== true ||
+          typeof result?.download_url !== "string" ||
+          !/^https?:\/\//i.test(result.download_url)) {
         throw new Error("API error");
       }
 
-      const result = await response.json();
-
-      if (result?.status !== true || typeof result?.result?.download !== "string" || !result.result.download.trim()) {
-        throw new Error("API error");
-      }
-
-      const downloadUrl = result.result.download;
-      const title = String(result.result.title || query);
+      const title = String(result.title || query).trim().slice(0, 180);
+      const description = String(result.description || "").trim().slice(0, 500);
+      const channel = String(result.channel || "").trim().slice(0, 100);
+      const duration = String(result.duration || "").trim();
+      const sourceUrl = typeof result.url === "string" && /^https?:\/\//i.test(result.url)
+        ? result.url
+        : "";
 
       await editStatus("⬇️ Downloading MP3...");
 
-      const downloadRes = await fetch(downloadUrl, {
+      const downloadResponse = await fetch(result.download_url, {
         headers: {
-          Referer: "https://zellrayy.com/",
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+          "User-Agent": "Mozilla/5.0",
           Accept: "audio/mpeg,audio/*;q=0.9,*/*;q=0.8"
         },
         redirect: "follow",
         signal: AbortSignal.timeout(300000)
       });
 
-      if (!downloadRes.ok || !downloadRes.body) {
-        throw new Error("API error");
-      }
+      if (!downloadResponse.ok || !downloadResponse.body) throw new Error("API error");
 
       await pipeline(
-        Readable.fromWeb(downloadRes.body),
+        Readable.fromWeb(downloadResponse.body),
         fs.createWriteStream(tempFile)
       );
 
       const stats = fs.statSync(tempFile);
-      if (!stats.size) {
-        throw new Error("API error");
-      }
+      if (!stats.size) throw new Error("API error");
 
       await editStatus("📤 Sending song...");
 
       const safeTitle = title
-        .replace(/[\\/:*?"<>|]/g, "_")
+        .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
+        .replace(/\s+/g, " ")
         .trim()
         .slice(0, 100) || "song";
+
+      const caption = [
+        "🎵 *" + title + "*",
+        channel ? "🎤 " + channel : "",
+        duration ? "⏱️ " + duration : "",
+        sourceUrl ? "🔗 " + sourceUrl : "",
+        description
+      ].filter(Boolean).join("\n");
 
       await sock.sendMessage(
         jid,
@@ -113,23 +116,30 @@ module.exports = {
           audio: { url: tempFile },
           mimetype: "audio/mpeg",
           fileName: safeTitle + ".mp3",
-          ptt: false
+          ptt: false,
+          ...(result.thumbnail && /^https?:\/\//i.test(result.thumbnail)
+            ? { contextInfo: { externalAdReply: {
+                title: title.slice(0, 100),
+                body: channel || "YouTube",
+                mediaType: 1,
+                thumbnailUrl: result.thumbnail,
+                sourceUrl: sourceUrl || undefined,
+                renderLargerThumbnail: false
+              } } }
+            : {})
         },
         { quoted: message }
       );
 
       await editStatus("✅ Song sent successfully!");
-
     } catch (error) {
-      console.error("[GALAXY-MD] song download error:", error);
+      console.error("[GALAXY-MD] play download failed:", error?.message || error);
       await editStatus("❌ Song download failed!\nAPI error");
     } finally {
       try {
-        if (fs.existsSync(tempFile)) {
-          fs.unlinkSync(tempFile);
-        }
-      } catch (err) {
-        console.warn("[GALAXY-MD] Could not delete song temp file:", err?.message);
+        if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+      } catch (error) {
+        console.warn("[GALAXY-MD] Could not delete song temp file:", error?.message);
       }
     }
   }
