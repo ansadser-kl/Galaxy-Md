@@ -413,7 +413,19 @@ async function startBot() {
             const botParticipant = participants.find((p) => participantMatches(p, botIds));
             botIsAdmin = !!(botParticipant?.admin || botParticipant?.superadmin);
             if (!(botParticipant?.admin || botParticipant?.superadmin)) {
-              console.warn("[GALAXY-MD] Ignoring group message: bot is not confirmed as a group admin.");
+              // Permit the passive mention-audio plugin even if Baileys cannot
+              // match the bot's PN/LID participant entry. Keep all other group
+              // processing behind the existing admin guard.
+              console.warn("[GALAXY-MD] Bot admin status not confirmed; checking mention plugin only.");
+              if (!text.startsWith(config.prefix)) {
+                let mentionHandled = false;
+                for (const plugin of plugins) {
+                  if (plugin.name !== "mention" || typeof plugin.handleMessage !== "function") continue;
+                  mentionHandled = !!(await plugin.handleMessage({ sock, jid, message, text, config, plugins }));
+                  if (mentionHandled) break;
+                }
+                if (mentionHandled) continue;
+              }
               continue;
             }
 
