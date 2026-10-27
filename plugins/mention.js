@@ -1,5 +1,7 @@
 "use strict";
 
+const { spawn } = require("node:child_process");
+
 const AUDIOS = [
   "https://galaxy.anuansad50.workers.dev/f/-1793084810671.galaxy-upload-1793084810583",
   "https://galaxy.anuansad50.workers.dev/f/-1793084817481.galaxy-upload-1793084817415",
@@ -53,6 +55,29 @@ function getMentionContexts(message) {
     msg.messageContextInfo,
   ];
   return candidates.filter(Boolean);
+}
+
+async function convertToVoiceNote(inputBuffer) {
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn("ffmpeg", [
+      "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+      "-vn", "-c:a", "libopus", "-application", "voip",
+      "-b:a", "32k", "-ar", "48000", "-ac", "1", "-f", "ogg", "pipe:1",
+    ], { stdio: ["pipe", "pipe", "pipe"] });
+    const chunks = [];
+    const errors = [];
+    ffmpeg.stdout.on("data", chunk => chunks.push(chunk));
+    ffmpeg.stderr.on("data", chunk => errors.push(chunk));
+    ffmpeg.on("error", error => reject(new Error("FFmpeg could not start: " + error.message)));
+    ffmpeg.on("close", code => {
+      if (code !== 0) return reject(new Error("FFmpeg audio conversion failed: " + Buffer.concat(errors).toString().trim()));
+      const output = Buffer.concat(chunks);
+      if (!output.length) return reject(new Error("FFmpeg returned an empty voice note"));
+      resolve(output);
+    });
+    ffmpeg.stdin.on("error", error => { if (error.code !== "EPIPE") reject(error); });
+    ffmpeg.stdin.end(inputBuffer);
+  });
 }
 
 async function fetchBuffer(url) {
@@ -112,9 +137,11 @@ module.exports = {
         }),
       ]);
 
+      const audio = await convertToVoiceNote(sourceAudio);
+
       await sock.sendMessage(jid, {
         audio,
-        mimetype: "audio/mp4",
+        mimetype: "audio/ogg; codecs=opus",
         ptt: true,
         contextInfo: {
           forwardingScore: 999,
