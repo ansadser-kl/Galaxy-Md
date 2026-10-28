@@ -427,20 +427,19 @@ async function startBot() {
             senderIsAdmin = !!(participant?.admin || participant?.superadmin);
             const botParticipant = participants.find((p) => participantMatches(p, botIds));
             botIsAdmin = !!(botParticipant?.admin || botParticipant?.superadmin);
-            if (!(botParticipant?.admin || botParticipant?.superadmin)) {
-              // Mention audio has already been checked above. Other group features
-              // remain behind the existing admin-status guard.
-              console.warn("[GALAXY-MD] Bot admin status not confirmed; skipping admin-only group processing.");
-              continue;
-            }
-
-            if (feature("welcome") && !message.key?.fromMe && message.messageStubType === 27) {
-              await sock.sendMessage(jid, { text: "👋 Welcome to the group!", mentions: [message.key?.participant, message.key?.participantAlt].filter(Boolean) }).catch(() => {});
-            }
-            if (feature("antilink") && !message.key?.fromMe && !senderIsAdmin && /(?:https?:\/\/|www\.|chat\.whatsapp\.com\/|t\.me\/)/i.test(text) && botIsAdmin) {
-              await sock.sendMessage(jid, { text: "⛔ Links are not allowed here. Removing the message." }).catch(() => {});
-              await sock.sendMessage(jid, { delete: message.key }).catch(() => {});
-              continue;
+            if (!botIsAdmin) {
+              // Do not block normal bot commands when the bot is not a group admin.
+              // The AI handler independently refuses group AI unless botIsAdmin is true.
+              console.warn("[GALAXY-MD] Bot is not confirmed as a group admin; group-admin features and group AI are disabled.");
+            } else {
+              if (feature("welcome") && !message.key?.fromMe && message.messageStubType === 27) {
+                await sock.sendMessage(jid, { text: "👋 Welcome to the group!", mentions: [message.key?.participant, message.key?.participantAlt].filter(Boolean) }).catch(() => {});
+              }
+              if (feature("antilink") && !message.key?.fromMe && !senderIsAdmin && /(?:https?:\/\/|www\.|chat\.whatsapp\.com\/|t\.me\/)/i.test(text)) {
+                await sock.sendMessage(jid, { text: "⛔ Links are not allowed here. Removing the message." }).catch(() => {});
+                await sock.sendMessage(jid, { delete: message.key }).catch(() => {});
+                continue;
+              }
             }
           }
 
