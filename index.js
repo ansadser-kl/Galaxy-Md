@@ -445,7 +445,7 @@ async function startBot() {
 
           // AI is opt-in per chat. Use .ai on / .ai off to control it.
           const commandText = text.startsWith(config.prefix) ? text.slice(config.prefix.length).trim() : "";
-          const aiToggleMatch = commandText.match(/^ai(?:\\s+(on|off|status))?\\s*$/i);
+          const aiToggleMatch = commandText.match(/^ai(?:\s+(on|off|status))?\s*$/i);
           if (aiToggleMatch) {
             const action = String(aiToggleMatch[1] || "status").toLowerCase();
             const isGroupChat = jid.endsWith("@g.us");
@@ -454,10 +454,10 @@ async function startBot() {
               message.key?.participantAlt,
               ...(message.key?.fromMe ? [sock.user?.id, sock.user?.lid, config.botNumber] : [message.key?.remoteJid]),
             ].filter(Boolean);
-            const trustedNumbers = trustedIds.map((id) => String(id).split("@")[0].split(":")[0].replace(/\\D/g, "")).filter(Boolean);
+            const trustedNumbers = trustedIds.map((id) => String(id).split("@")[0].split(":")[0].replace(/\D/g, "")).filter(Boolean);
             const trustedUsers = [
-              String(config.botNumber || "").replace(/\\D/g, ""),
-              String(data.ownerNumber || config.ownerNumber || "").replace(/\\D/g, ""),
+              String(config.botNumber || "").replace(/\D/g, ""),
+              String(data.ownerNumber || config.ownerNumber || "").replace(/\D/g, ""),
               ...(config.sudoNumbers || []),
               ...(Array.isArray(data.sudo) ? data.sudo : []),
             ].filter(Boolean);
@@ -479,7 +479,7 @@ async function startBot() {
             else if (action === "off") data.aiChats[jid] = false;
 
             try {
-              fs.writeFileSync(dataFile, JSON.stringify(data, null, 2) + "\\n", "utf8");
+              fs.writeFileSync(dataFile, JSON.stringify(data, null, 2) + "\n", "utf8");
             } catch (error) {
               console.error("[GALAXY-MD] Could not save AI chat setting:", error.message || error);
               await sock.sendMessage(jid, { text: "AI setting save cheyyan pattiyilla. File permission check cheyyu." }, { quoted: message });
@@ -492,7 +492,7 @@ async function startBot() {
               : action === "off"
                 ? "AI disabled for this chat."
                 : (enabled ? "AI is ON in this chat." : "AI is OFF in this chat.");
-            await sock.sendMessage(jid, { text: statusText + "\\nCommands: " + config.prefix + "ai on | " + config.prefix + "ai off | " + config.prefix + "ai status" }, { quoted: message });
+            await sock.sendMessage(jid, { text: statusText + "\nCommands: " + config.prefix + "ai on | " + config.prefix + "ai off | " + config.prefix + "ai status" }, { quoted: message });
             continue;
           }
 
