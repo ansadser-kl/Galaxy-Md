@@ -1,21 +1,8 @@
 "use strict";
 
-const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
-const QUOTA_ERROR = /resource_exhausted|quota|rate.?limit|too many requests|http 429|429|daily limit|requests per minute|tokens per minute/i;
-const INVALID_KEY_ERROR = /api key not valid|invalid api key|api_key_invalid|key expired|http 401/i;
+const { getRecentHistory, saveTurn } = require("./ai-memory");
 
-function messageText(result) {
-  return result?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim() || "";
-}
-
-function cleanJson(value) {
-  let text = String(value || "").trim();
-  text = text.replace(/^\`\`\`(?:json)?\s*/i, "").replace(/\s*\`\`\`$/, "");
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start >= 0 && end > start) text = text.slice(start, end + 1);
-  return JSON.parse(text);
-}
+const API_URL = String(process.env.AI_API_URL || "https://api.nexray.eu.cc/ai/gemini").trim();
 
 function normalNumber(value) {
   return String(value || "").split("@")[0].split(":")[0].replace(/\D/g, "");
@@ -44,97 +31,74 @@ function toolList(plugins) {
   return plugins.map((plugin) => ({
     name: plugin.name,
     aliases: Array.isArray(plugin.aliases) ? plugin.aliases : [],
-    description: String(plugin.description || plugin.help || ("Run the " + plugin.name + " plugin.")).slice(0, 240),
+    description: String(plugin.description || plugin.help || ("Run the " + plugin.name + " plugin.")).slice(0, 180),
   }));
 }
 
-function getApiKeys() {
-  const keys = [
-    process.env.GEMINI_API_KEY_1,
-    process.env.GEMINI_API_KEY_2,
-    process.env.GEMINI_API_KEY_3,
-    process.env.GEMINI_API_KEY_4,
-    process.env.GEMINI_API_KEY,
-  ].map((key) => String(key || "").trim()).filter(Boolean);
-  return [...new Set(keys)];
+function cleanJson(value) {
+  let text = String(value || "").trim();
+  text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) text = text.slice(start, end + 1);
+  return JSON.parse(text);
 }
 
-function isKeyOrQuotaFailure(error) {
-  return QUOTA_ERROR.test(String(error?.message || error)) || INVALID_KEY_ERROR.test(String(error?.message || error));
+function detectLanguage(text) {
+  const value = String(text || "");
+  if (/[\u0D00-\u0D7F]/.test(value)) return "Malayalam script";
+  if (/[\u0900-\u097F]/.test(value)) return "Hindi";
+  if (/\b(ente|njan|njaan|ningal|ninakku|entha|engane|alle|aano|aakum|venam|bro|cheyy|parayu|paranja|ithu|ith|und|illa|oru|pinne|evide|malayalam)\b/i.test(value)) return "Manglish (Malayalam written in Latin letters)";
+  return "English";
 }
 
-async function askGemini({ apiKey, model, text, plugins, isGroup, botIsAdmin }) {
-  const pluginList = toolList(plugins);
+async function askAI({ text, plugins, history, isGroup, botIsAdmin }) {
+  const language = detectLanguage(text);
   const prompt = [
-    "You are GALAXY-MD V2.0, an assistant operating inside WhatsApp.",
-    "Understand the user's intent and either choose one existing plugin tool or reply normally.",
-    "Return ONLY JSON with exactly one of these forms:",
-    '{"type":"reply","text":"your WhatsApp reply"}',
-    '{"type":"tool","name":"exact_plugin_name","args":"arguments to pass after the command"}',
-    "Only choose a plugin whose exact name appears in the supplied plugin list. Never invent a plugin or claim an action succeeded unless the tool was executed.",
-    "If a URL is present, select a plugin that supports that platform if one exists. Never select a YouTube downloader unless the user clearly asks for a YouTube download and a matching plugin is listed. If no tool supports the request, explain that briefly.",
-    "For ordinary questions, chat, translation, coding help, and general knowledge, reply only in the language used or explicitly requested by the user. Supported languages: Malayalam (മലയാളം script), Manglish (Malayalam written in Latin letters), English, and Hindi (हिन्दी script). Match the user's current message language; do not randomly switch languages.",
-    "Do not ask for command syntax if a natural-language request can be mapped to a listed plugin.",
-    "For group moderation or other privileged actions, request authorization in your reply instead of trying to bypass access controls.",
-    "Context: " + (isGroup ? "WhatsApp group; bot admin status is " + (botIsAdmin ? "admin" : "not admin") + "." : "direct message."),
-    "Available plugins JSON:",
-    JSON.stringify(pluginList),
-    "Incoming user message:",
-    String(text || "(The message has no readable text.)"),
+    "You are GALAXY-MD, a helpful WhatsApp assistant.",
+    "Reply ONLY in one of these languages: Malayalam, Manglish, Hindi, or English. Never use any other language.",
+    "Match the language of the CURRENT user message, not older messages. If the current message is Malayalam script, reply in Malayalam script. If it is Manglish, reply in Manglish. If Hindi, reply in Hindi. If English, reply in English. If the user switches language later, switch with them.",
+    "Detected current-message language hint: " + language + ". Follow the actual current message if this hint is wrong.",
+    "Use the conversation history only as context for this same chat. Do not assume details that are not in this chat's history.",
+    "You can use existing plugins. If the user requests an action that exactly matches a plugin, return only JSON in this form: {\"type\":\"tool\",\"name\":\"exact_plugin_name_or_alias\",\"args\":\"arguments\"}. Do not claim an action completed before the plugin runs.",
+    "For normal conversation, return only JSON in this form: {\"type\":\"reply\",\"text\":\"your response\"}. Do not wrap JSON in markdown.",
+    "Never invent plugin names. Choose only from the plugin list below.",
+    "Chat type: " + (isGroup ? "WhatsApp group" : "private chat") + ". Bot is group admin: " + (botIsAdmin ? "yes" : "no") + ".",
+    "If this is a group, only respond when the bot is an admin. Never try to bypass that rule.",
+    "Available plugins: " + JSON.stringify(toolList(plugins)),
+    "Recent conversation history for this chat only:\n" + (history.length ? history.map((item) => (item.role === "assistant" ? "GALAXY-MD" : "USER") + ": " + item.content).join("\n") : "(No previous messages in this chat.)"),
+    "CURRENT USER MESSAGE:\n" + String(text || ""),
   ].join("\n\n");
 
-  const response = await fetch(API_BASE + encodeURIComponent(model) + ":generateContent?key=" + encodeURIComponent(apiKey), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.2, responseMimeType: "application/json" },
-    }),
-    signal: AbortSignal.timeout(30000),
-  });
-
+  const url = new URL(API_URL);
+  url.searchParams.set("text", prompt);
+  const response = await fetch(url.toString(), { method: "GET", signal: AbortSignal.timeout(45000) });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = data?.error?.message || ("HTTP " + response.status);
-    const error = new Error(detail);
-    error.status = response.status;
-    error.apiStatus = data?.error?.status || "";
-    throw error;
+  if (!response.ok || data?.status === false) {
+    throw new Error(data?.message || ("AI API HTTP " + response.status));
   }
-  return cleanJson(messageText(data));
-}
+  const answer = String(data?.result?.text || data?.text || "").trim();
+  if (!answer) throw new Error("AI API returned an empty response.");
 
-async function askWithKeyRotation({ apiKeys, model, text, plugins, isGroup, botIsAdmin }) {
-  let lastError;
-  for (let index = 0; index < apiKeys.length; index += 1) {
-    try {
-      return await askGemini({ apiKey: apiKeys[index], model, text, plugins, isGroup, botIsAdmin });
-    } catch (error) {
-      lastError = error;
-      const eligible = isKeyOrQuotaFailure(error);
-      const hasNext = index < apiKeys.length - 1;
-      if (!eligible || !hasNext) break;
-      console.warn("[GALAXY-MD AI] Key " + (index + 1) + " reached a quota/rate limit or is invalid; trying the next configured key.");
-    }
+  try {
+    return { result: cleanJson(answer), apiSessionId: String(data?.result?.session_id || "") };
+  } catch {
+    return { result: { type: "reply", text: answer }, apiSessionId: String(data?.result?.session_id || "") };
   }
-  throw lastError || new Error("No Gemini API key is configured.");
 }
 
 async function handleAIMessage(context) {
-  const apiKeys = getApiKeys();
-  if (!apiKeys.length) return false;
-
   const { sock, jid, message, text, config, plugins } = context;
   const isGroup = String(jid || "").endsWith("@g.us");
   if (message?.key?.fromMe) return true;
-  // Fail closed: the bot must be positively identified as a group admin before any group AI reply.
+  // Groups are AI-enabled only after the bot is positively confirmed as an admin.
   if (isGroup && !context.botIsAdmin) return true;
   if (!String(text || "").trim()) return false;
 
-  const model = String(process.env.GEMINI_MODEL || "gemini-3.5-flash-lite").trim();
   try {
-    const result = await askWithKeyRotation({
-      apiKeys, model, text, plugins, isGroup, botIsAdmin: !!context.botIsAdmin,
+    const history = await getRecentHistory(jid, 12);
+    const { result } = await askAI({
+      text, plugins, history, isGroup, botIsAdmin: !!context.botIsAdmin,
     });
 
     if (result?.type === "tool") {
@@ -163,6 +127,7 @@ async function handleAIMessage(context) {
       }
 
       const argsText = String(result.args || "").trim();
+      await saveTurn(jid, "user", text);
       await plugin.execute({
         ...context,
         args: argsText ? argsText.split(/\s+/) : [],
@@ -176,12 +141,15 @@ async function handleAIMessage(context) {
     }
 
     if (result?.type === "reply" && typeof result.text === "string" && result.text.trim()) {
-      await sock.sendMessage(jid, { text: result.text.trim() }, { quoted: message });
+      const reply = result.text.trim();
+      await sock.sendMessage(jid, { text: reply }, { quoted: message });
+      await saveTurn(jid, "user", text);
+      await saveTurn(jid, "assistant", reply);
       return true;
     }
     return false;
   } catch (error) {
-    console.error("[GALAXY-MD AI] Request failed after configured key fallback:", error.message || error);
+    console.error("[GALAXY-MD AI] Request failed:", error.message || error);
     return false;
   }
 }
