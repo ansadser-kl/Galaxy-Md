@@ -35,6 +35,21 @@ function toolList(plugins) {
   }));
 }
 
+async function safeGetHistory(chatId) {
+  try { return await getRecentHistory(chatId, 12); }
+  catch (error) {
+    console.error("[GALAXY-MD AI] Could not read chat memory; continuing without it:", error.message || error);
+    return [];
+  }
+}
+
+async function safeSaveTurn(chatId, role, content) {
+  try { await saveTurn(chatId, role, content); }
+  catch (error) {
+    console.error("[GALAXY-MD AI] Could not save chat memory:", error.message || error);
+  }
+}
+
 function cleanJson(value) {
   let text = String(value || "").trim();
   text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
@@ -96,7 +111,7 @@ async function handleAIMessage(context) {
   if (!String(text || "").trim()) return false;
 
   try {
-    const history = await getRecentHistory(jid, 12);
+    const history = await safeGetHistory(jid);
     const { result } = await askAI({
       text, plugins, history, isGroup, botIsAdmin: !!context.botIsAdmin,
     });
@@ -127,7 +142,7 @@ async function handleAIMessage(context) {
       }
 
       const argsText = String(result.args || "").trim();
-      await saveTurn(jid, "user", text);
+      await safeSaveTurn(jid, "user", text);
       await plugin.execute({
         ...context,
         args: argsText ? argsText.split(/\s+/) : [],
@@ -144,7 +159,7 @@ async function handleAIMessage(context) {
       const reply = result.text.trim();
       await sock.sendMessage(jid, { text: reply }, { quoted: message });
       await saveTurn(jid, "user", text);
-      await saveTurn(jid, "assistant", reply);
+      await safeSaveTurn(jid, "assistant", reply);
       return true;
     }
     return false;
