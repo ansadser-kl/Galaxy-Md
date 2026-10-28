@@ -1,7 +1,7 @@
 {
   "name": "galaxy-md",
   "version": "2.0.0",
-  "description": "GALAXY-MD V2.0 - Gemini Flash AI agent for WhatsApp, Termux, VPS, and PC",
+  "description": "GALAXY-MD V2.0 - AI agent for WhatsApp, Termux, VPS, and PC",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -16,6 +16,7 @@
   "dependencies": {
     "baileys": "7.0.0-rc14",
     "dotenv": "^16.4.7",
+    "pg": "^8.16.3",
     "pino": "^9.6.0"
   }
 }
