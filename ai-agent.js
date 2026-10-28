@@ -106,6 +106,8 @@ async function handleAIMessage(context) {
   const { sock, jid, message, text, config, plugins } = context;
   const isGroup = String(jid || "").endsWith("@g.us");
   if (message?.key?.fromMe) return true;
+  // AI must be explicitly enabled for this chat with the .ai on command.
+  if (context.aiEnabled !== true) return true;
   // Groups are AI-enabled only after the bot is positively confirmed as an admin.
   if (isGroup && !context.botIsAdmin) return true;
   if (!String(text || "").trim()) return false;
