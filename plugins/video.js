@@ -9,10 +9,10 @@ const { pipeline } = require("stream/promises");
 module.exports = {
   name: "video",
   aliases: [],
-  description: "Download YouTube videos in 360p",
+  description: "Download YouTube videos in 720p",
   category: "Downloader",
   async execute({ sock, jid, message, text, args }) {
-    let input = String(text || args?.join(" ") || "").trim();
+    const input = String(text || args?.join(" ") || "").trim();
     let url = input.match(/https?:\/\/\S+/i)?.[0]?.replace(/[)>]+$/, "");
 
     if (!url || !/(youtube\.com|youtu\.be)/i.test(url)) {
@@ -28,42 +28,41 @@ module.exports = {
       if (shortId) url = "https://www.youtube.com/watch?v=" + shortId;
     }
 
+    // Default to 720p; optionally allow .video <url> 360 / 480 / 720 / 1080.
+    const qualityMatch = input.match(/(?:^|\s)(144|240|360|480|720|1080)p?(?:\s|$)/i);
+    const quality = qualityMatch ? qualityMatch[1] : "720";
+    const qualityLabel = quality + "p";
     const tempFile = path.join(os.tmpdir(), "galaxy-video-" + Date.now() + "-" + Math.random().toString(16).slice(2) + ".mp4");
     let statusMessage;
 
-    const editStatus = async (text) => {
+    const editStatus = async (status) => {
       if (statusMessage?.key) {
-        return sock.sendMessage(jid, { text, edit: statusMessage.key });
+        return sock.sendMessage(jid, { text: status, edit: statusMessage.key });
       }
     };
 
     try {
       statusMessage = await sock.sendMessage(jid, { text: "Downloading..." }, { quoted: message });
 
-      const response = await fetch("https://api.ytultra.com/ikool/youtube/download", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ url }),
+      const apiUrl = new URL("https://xenosirapis.zone.id/api/ytvideo2");
+      apiUrl.searchParams.set("url", url);
+      apiUrl.searchParams.set("quality", quality);
+
+      const response = await fetch(apiUrl, {
+        headers: { Accept: "application/json" },
         signal: AbortSignal.timeout(60000)
       });
 
       if (!response.ok) throw new Error("Downloader API returned HTTP " + response.status);
       const result = await response.json();
 
-      if (result?.code !== "0000" || !Array.isArray(result?.data?.medias)) {
-        throw new Error(result?.msg || "Could not get video details from API.");
+      if (result?.success !== true || typeof result?.downloadUrl !== "string" ||
+          !/^https?:\/\//i.test(result.downloadUrl)) {
+        throw new Error("Could not get video download link from API.");
       }
 
-      const media = result.data.medias.find(item =>
-        item && item.quality === "360p" && !item.locked &&
-        typeof item.url === "string" && /^https?:\/\//i.test(item.url) &&
-        /\.mp4/i.test(item.format || "")
-      );
-
-      if (!media) throw new Error("360p MP4 download is unavailable for this video.");
-
-      const download = await fetch(media.url, {
-        headers: { "User-Agent": "Mozilla/5.0" },
+      const download = await fetch(result.downloadUrl, {
+        headers: { "User-Agent": "Mozilla/5.0", Accept: "video/mp4,*/*" },
         signal: AbortSignal.timeout(300000)
       });
 
@@ -77,19 +76,20 @@ module.exports = {
 
       await editStatus("Sending...");
 
-      const caption = (result.data.title || "YouTube Video") + "\nQuality: 360p";
+      const title = String(result.title || "YouTube Video").slice(0, 180);
+      const caption = title + "\nQuality: " + (result.quality || qualityLabel);
       if (stats.size > 180 * 1024 * 1024) {
         await sock.sendMessage(jid, {
           document: { url: tempFile },
           mimetype: "video/mp4",
-          fileName: "galaxy-video-360p.mp4",
+          fileName: "galaxy-video-" + qualityLabel + ".mp4",
           caption: caption + "\nSent as document because file exceeds 180 MB."
         }, { quoted: message });
       } else {
         await sock.sendMessage(jid, {
           video: { url: tempFile },
           mimetype: "video/mp4",
-          fileName: "galaxy-video-360p.mp4",
+          fileName: "galaxy-video-" + qualityLabel + ".mp4",
           caption
         }, { quoted: message });
       }
@@ -98,7 +98,7 @@ module.exports = {
     } catch (error) {
       console.error("[GALAXY-MD] Video download failed:", error);
       try {
-        await editStatus("Download failed!\n" + String(error?.message || error).slice(0, 200));
+        await editStatus("Download failed. Please try again.");
       } catch {
         await sock.sendMessage(
           jid,
