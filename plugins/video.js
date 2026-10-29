@@ -9,7 +9,7 @@ const { pipeline } = require("stream/promises");
 module.exports = {
   name: "video",
   aliases: [],
-  description: "Download YouTube videos in 720p",
+  description: "Download YouTube videos as MP4",
   category: "Downloader",
   async execute({ sock, jid, message, text, args }) {
     const input = String(text || args?.join(" ") || "").trim();
@@ -28,10 +28,6 @@ module.exports = {
       if (shortId) url = "https://www.youtube.com/watch?v=" + shortId;
     }
 
-    // Default to 720p; optionally allow .video <url> 360 / 480 / 720 / 1080.
-    const qualityMatch = input.match(/(?:^|\s)(144|240|360|480|720|1080)p?(?:\s|$)/i);
-    const quality = qualityMatch ? qualityMatch[1] : "720";
-    const qualityLabel = quality + "p";
     const tempFile = path.join(os.tmpdir(), "galaxy-video-" + Date.now() + "-" + Math.random().toString(16).slice(2) + ".mp4");
     let statusMessage;
 
@@ -44,9 +40,9 @@ module.exports = {
     try {
       statusMessage = await sock.sendMessage(jid, { text: "Downloading..." }, { quoted: message });
 
-      const apiUrl = new URL("https://xenosirapis.zone.id/api/ytvideo2");
+      const apiUrl = new URL("https://zellrayy.com/download/youtube");
       apiUrl.searchParams.set("url", url);
-      apiUrl.searchParams.set("quality", quality);
+      apiUrl.searchParams.set("format", "mp4");
 
       const response = await fetch(apiUrl, {
         headers: { Accept: "application/json" },
@@ -56,15 +52,35 @@ module.exports = {
       if (!response.ok) throw new Error("Downloader API returned HTTP " + response.status);
       const result = await response.json();
 
-      if (result?.success !== true || typeof result?.downloadUrl !== "string" ||
-          !/^https?:\/\//i.test(result.downloadUrl)) {
+      const data = result?.result;
+      const downloadUrl = data?.download || data?.stream;
+      if (result?.status !== true || typeof downloadUrl !== "string" ||
+          !/^https?:\/\//i.test(downloadUrl)) {
         throw new Error("Could not get video download link from API.");
       }
 
-      const download = await fetch(result.downloadUrl, {
-        headers: { "User-Agent": "Mozilla/5.0", Accept: "video/mp4,*/*" },
-        signal: AbortSignal.timeout(300000)
+      // Prefer the direct download endpoint, with the stream URL as a fallback.
+      let download = await fetch(downloadUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          Accept: "video/mp4,application/octet-stream,*/*",
+          Referer: "https://zellrayy.com/"
+        },
+        signal: AbortSignal.timeout(300000),
+        redirect: "follow"
       });
+
+      if ((!download.ok || !download.body) && data?.stream && data.stream !== downloadUrl) {
+        download = await fetch(data.stream, {
+          headers: {
+            "User-Agent": "Mozilla/5.0",
+            Accept: "video/mp4,application/octet-stream,*/*",
+            Referer: "https://zellrayy.com/"
+          },
+          signal: AbortSignal.timeout(300000),
+          redirect: "follow"
+        });
+      }
 
       if (!download.ok || !download.body) {
         throw new Error("Video download failed (HTTP " + download.status + ").");
@@ -76,20 +92,22 @@ module.exports = {
 
       await editStatus("Sending...");
 
-      const title = String(result.title || "YouTube Video").slice(0, 180);
-      const caption = title + "\nQuality: " + (result.quality || qualityLabel);
+      const title = String(data?.title || "YouTube Video").slice(0, 180);
+      const filename = String(data?.filename || "galaxy-video.mp4").replace(/[\\/:*?\"<>|]/g, "_").slice(0, 180);
+      const caption = title + "\nFormat: MP4";
+
       if (stats.size > 180 * 1024 * 1024) {
         await sock.sendMessage(jid, {
           document: { url: tempFile },
           mimetype: "video/mp4",
-          fileName: "galaxy-video-" + qualityLabel + ".mp4",
+          fileName: filename.endsWith(".mp4") ? filename : filename + ".mp4",
           caption: caption + "\nSent as document because file exceeds 180 MB."
         }, { quoted: message });
       } else {
         await sock.sendMessage(jid, {
           video: { url: tempFile },
           mimetype: "video/mp4",
-          fileName: "galaxy-video-" + qualityLabel + ".mp4",
+          fileName: filename.endsWith(".mp4") ? filename : filename + ".mp4",
           caption
         }, { quoted: message });
       }
