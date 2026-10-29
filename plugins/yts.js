@@ -75,19 +75,21 @@ module.exports = {
         createdAt: Date.now()
       });
 
-      const lines = results.map((item, index) => {
-        const title = safeText(item.title, 110) || "Untitled";
-        const duration = safeText(item.duration, 12) || "Unknown";
-        const author = safeText(item.author, 55) || "Unknown channel";
-        return (index + 1) + ". *" + title + "*\n   ⏱ " + duration +
-          " | 👁 " + formatViews(item.views) + " views\n   👤 " + author;
+      const lines = results.map((video, index) => {
+        const title = safeText(video.title, 140) || "Untitled";
+        const duration = safeText(video.duration, 20) || "Unknown";
+        const channel = safeText(video.author || video.channel?.name, 80) || "Unknown channel";
+        return "*" + (index + 1) + ".* " + title + "\n" +
+          "   _Duration:_ `" + duration + "` | _Views:_ `" + formatViews(video.views) + "`\n" +
+          "   _Channel:_ " + channel;
       });
 
       await sock.sendMessage(jid, {
-        text: "🎵 *YouTube Search Results*\nQuery: " + safeText(query, 100) +
-          "\n\n" + lines.join("\n\n") +
-          "\n\nReply with the result number (1-" + results.length + ")." +
-          "\n⏳ Selection expires in 10 minutes."
+        text: "*YouTube Search Results*\n\n" +
+          "_Found " + results.length + " results for:_ *" + safeText(query, 100) + "*\n\n" +
+          lines.join("\n\n") +
+          "\n\n_Reply with a number (1-" + results.length + ") to see video details._" +
+          "\n\n_Selection expires in 10 minutes._"
       }, { quoted: message });
 
       try {
