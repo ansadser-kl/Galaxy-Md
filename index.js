@@ -9,7 +9,7 @@ const pino = require("pino");
 const config = require("./config");
 const { handleAIMessage } = require("./ai-agent");
 
-const SESSION_DIR = path.join(__dirname, "session");
+const SESSION_DIR = process.env.SESSION_DIR ? path.resolve(process.env.SESSION_DIR) : path.join(__dirname, "session");
 const PLUGINS_DIR = path.join(__dirname, "plugins");
 let reconnectTimer = null;
 let starting = false;
