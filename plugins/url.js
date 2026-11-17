@@ -132,10 +132,13 @@ module.exports = {
 
       const s = await uploadBuffer(buffer, name, mime);
 
-      // Status response-il ninnu file details / code kandupidikkunnu
-      const fileObj = s.file || s;
-      const shareCode = fileObj.code || fileObj.slug || fileObj.shortId || fileObj.shareId || fileObj.id;
-      if (!shareCode) throw new Error("Share code not found in response.");
+      console.log("[GALAXY-MD] Upload Status Object:", JSON.stringify(s));
+
+      // Database-il 'h' key-il aanu id save cheyyunnathu, athukond 'h' adyam edukkunnu
+      const fileObj = s.file || s.data || s;
+      const shareCode = fileObj.h || fileObj.id || fileObj.code || fileObj.slug;
+      
+      if (!shareCode) throw new Error("File hash (h) not found in upload response.");
 
       const link = `${BASE}/dl/${shareCode}`;
 
