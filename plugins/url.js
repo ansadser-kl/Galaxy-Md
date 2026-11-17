@@ -2,7 +2,7 @@
 
 const BASE = "https://ansadkl-file.onrender.com";
 const CHUNK = 8 * 1024 * 1024;
-const MAX_SIZE = 100 * 1024 * 1024; // bot memory kaaranam, venel koottaam
+const MAX_SIZE = 100 * 1024 * 1024;
 
 const EXT = {
   "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif",
@@ -60,7 +60,7 @@ async function loadDownloader() {
   throw new Error("Baileys downloadMediaMessage not found.");
 }
 
-async function uploadBuffer(buffer, name, mime) {
+async function uploadAndGetHash(buffer, name, mime) {
   const init = await api("/api/upload/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -80,16 +80,28 @@ async function uploadBuffer(buffer, name, mime) {
 
   await api("/api/upload/" + id + "/complete", { method: "POST" }, 60000);
 
-  let s;
+  let status;
   for (let i = 0; i < 120; i++) {
-    await sleep(1000);
-    s = await api("/api/upload/" + id, {}, 30000);
-    if (s?.status === "done") break;
-    if (s?.status === "error") throw new Error(s.error || "Upload processing failed.");
+    await sleep(1500);
+    status = await api("/api/upload/" + id, {}, 30000);
+    if (status?.status === "done") break;
+    if (status?.status === "error") throw new Error(status.error || "Upload processing failed.");
   }
-  if (s?.status !== "done") throw new Error("Upload timed out.");
+  if (status?.status !== "done") throw new Error("Upload timed out.");
 
-  return s;
+  // Status object-il ninnu file hash/id edukkan nokkuvnu, illengil list edukkum
+  let fileHash = status?.h || status?.file?.h || status?.id;
+
+  if (!fileHash) {
+    const listRes = await api("/api/files?view=files", {}, 30000);
+    const files = Array.isArray(listRes) ? listRes : listRes?.files || [];
+    // Name match cheyyunnatheo anengil list-ile adhyathe file-o edukkunnu
+    const matchedFile = files.find((f) => f.n === name) || files[0];
+    fileHash = matchedFile?.h || matchedFile?.id;
+  }
+
+  if (!fileHash) throw new Error("File hash (h) could not be retrieved.");
+  return fileHash;
 }
 
 module.exports = {
@@ -130,17 +142,9 @@ module.exports = {
       const name = String(media.node.fileName || "galaxy-" + Date.now() + "." + ext)
         .replace(/[\\/:*?"<>|]/g, "_").slice(0, 150);
 
-      const s = await uploadBuffer(buffer, name, mime);
+      const fileHash = await uploadAndGetHash(buffer, name, mime);
 
-      console.log("[GALAXY-MD] Upload Status Object:", JSON.stringify(s));
-
-      // Database-il 'h' key-il aanu id save cheyyunnathu, athukond 'h' adyam edukkunnu
-      const fileObj = s.file || s.data || s;
-      const shareCode = fileObj.h || fileObj.id || fileObj.code || fileObj.slug;
-      
-      if (!shareCode) throw new Error("File hash (h) not found in upload response.");
-
-      const link = `${BASE}/dl/${shareCode}`;
+      const link = `${BASE}/dl/${fileHash}`;
 
       await editStatus(link);
     } catch (error) {
