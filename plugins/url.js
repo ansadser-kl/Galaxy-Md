@@ -34,7 +34,6 @@ function getMedia(message) {
   const types = ["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"];
   const pick = (m) => types.find((t) => m?.[t]);
 
-  // quoted media first, pinne message-il thanne media (caption .upload)
   if (quoted && pick(quoted)) {
     return {
       type: pick(quoted),
@@ -90,28 +89,27 @@ async function uploadBuffer(buffer, name, mime) {
   }
   if (status?.status !== "done") throw new Error("Upload timed out.");
 
-  // file id: status-il undengil athu, illengil list-il ninnu name vech kandupidikkum
-  let fileId = status?.file?.id ?? status?.fileId ?? status?.file_id;
-  if (fileId == null) {
+  let fileObj = status?.file;
+  if (!fileObj) {
     const list = await api("/api/files?view=files", {}, 30000);
     const files = Array.isArray(list) ? list : list?.files || [];
-    fileId = (files.find((f) => f.name === name) || files[0])?.id;
+    fileObj = files.find((f) => f.name === name) || files[0];
   }
-  if (fileId == null) throw new Error("Upload done but file id not found.");
-  return fileId;
+  if (!fileObj) throw new Error("Upload done but file info not found.");
+  return fileObj;
 }
 
 module.exports = {
-  name: "upload",
-  aliases: ["tourl", "ansadkl"],
-  description: "Upload replied media to Ansadkl Drive and get a link",
+  name: "url",
+  aliases: ["tourl", "ansadkl", "upload"],
+  description: "Upload replied media to Ansadkl Drive and get a DL link",
   category: "Tools",
   async execute({ sock, jid, message }) {
     const media = getMedia(message);
     if (!media) {
       return sock.sendMessage(
         jid,
-        { text: "Oru file/image/video/audio-ilekku reply cheythu .upload ayakkuka." },
+        { text: "Oru file/image/video/audio-ilekku reply cheythu .url ayakkuka." },
         { quoted: message }
       );
     }
@@ -139,15 +137,14 @@ module.exports = {
       const name = String(media.node.fileName || "galaxy-" + Date.now() + "." + ext)
         .replace(/[\\/:*?"<>|]/g, "_").slice(0, 150);
 
-      const fileId = await uploadBuffer(buffer, name, mime);
+      const fileObj = await uploadBuffer(buffer, name, mime);
 
-      const link = BASE + "/api/files/" + fileId + "/stream";
-      const dl = link + "?download=1";
-      const sizeMb = (buffer.length / 1024 / 1024).toFixed(2);
+      const shareCode = fileObj.code || fileObj.slug || fileObj.shortId || fileObj.shareId || fileObj.id;
+      if (!shareCode) throw new Error("File share code not found.");
 
-      await editStatus(
-        "Upload complete!\n\nName: " + name + "\nSize: " + sizeMb + " MB\n\nView: " + link + "\nDownload: " + dl
-      );
+      const link = `${BASE}/dl/${shareCode}`;
+
+      await editStatus(link);
     } catch (error) {
       console.error("[GALAXY-MD] Upload failed:", error);
       const msg = "Upload failed: " + (error?.message || "unknown error");
