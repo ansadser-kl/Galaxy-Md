@@ -1,148 +1,161 @@
 "use strict";
 
-const { Buffer } = require("buffer");
+const BASE = "https://ansadkl-file.onrender.com";
+const CHUNK = 8 * 1024 * 1024;
+const MAX_SIZE = 100 * 1024 * 1024; // bot memory kaaranam, venel koottaam
 
-function unwrapMessage(message) {
-  let current = message || {};
-  while (
-    current.ephemeralMessage?.message ||
-    current.viewOnceMessage?.message ||
-    current.viewOnceMessageV2?.message ||
-    current.documentWithCaptionMessage?.message
-  ) {
-    current =
-      current.ephemeralMessage?.message ||
-      current.viewOnceMessage?.message ||
-      current.viewOnceMessageV2?.message ||
-      current.documentWithCaptionMessage?.message;
+const EXT = {
+  "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif",
+  "video/mp4": "mp4", "video/3gpp": "3gp", "audio/mpeg": "mp3", "audio/mp4": "m4a",
+  "audio/ogg": "ogg", "audio/ogg; codecs=opus": "ogg", "application/pdf": "pdf",
+  "application/zip": "zip", "text/plain": "txt"
+};
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function api(pathname, options = {}, timeout = 60000) {
+  const res = await fetch(BASE + pathname, { ...options, signal: AbortSignal.timeout(timeout) });
+  let data = null;
+  try { data = await res.json(); } catch {}
+  if (!res.ok) throw new Error(data?.error || "API HTTP " + res.status);
+  return data;
+}
+
+function getMedia(message) {
+  const unwrap = (m) =>
+    m?.ephemeralMessage?.message || m?.viewOnceMessage?.message ||
+    m?.viewOnceMessageV2?.message || m?.documentWithCaptionMessage?.message || m;
+
+  const own = unwrap(message?.message);
+  const ctx = own?.extendedTextMessage?.contextInfo || own?.imageMessage?.contextInfo ||
+    own?.videoMessage?.contextInfo || own?.documentMessage?.contextInfo;
+  const quoted = unwrap(ctx?.quotedMessage);
+
+  const types = ["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"];
+  const pick = (m) => types.find((t) => m?.[t]);
+
+  // quoted media first, pinne message-il thanne media (caption .upload)
+  if (quoted && pick(quoted)) {
+    return {
+      type: pick(quoted),
+      node: quoted[pick(quoted)],
+      msg: {
+        key: { remoteJid: message.key.remoteJid, id: ctx.stanzaId, participant: ctx.participant },
+        message: quoted
+      }
+    };
   }
-  return current;
+  if (own && pick(own)) {
+    return { type: pick(own), node: own[pick(own)], msg: message };
+  }
+  return null;
 }
 
-function getQuotedMessage(message, jid) {
-  const msg = unwrapMessage(message?.message);
-  const contextInfo =
-    msg?.extendedTextMessage?.contextInfo ||
-    msg?.imageMessage?.contextInfo ||
-    msg?.videoMessage?.contextInfo ||
-    msg?.documentMessage?.contextInfo ||
-    msg?.audioMessage?.contextInfo ||
-    msg?.stickerMessage?.contextInfo;
-
-  if (!contextInfo?.quotedMessage || !contextInfo?.stanzaId) return null;
-
-  return {
-    key: {
-      remoteJid: jid,
-      id: contextInfo.stanzaId,
-      participant: contextInfo.participant || undefined,
-      fromMe: false,
-    },
-    message: contextInfo.quotedMessage,
-  };
+async function loadDownloader() {
+  for (const name of ["@whiskeysockets/baileys", "baileys"]) {
+    try {
+      const mod = require(name);
+      if (mod.downloadMediaMessage) return mod.downloadMediaMessage;
+    } catch {}
+  }
+  throw new Error("Baileys downloadMediaMessage not found.");
 }
 
-function getMediaType(message) {
-  const msg = unwrapMessage(message?.message);
-  const supported = [
-    "imageMessage",
-    "videoMessage",
-    "audioMessage",
-    "documentMessage",
-    "stickerMessage",
-  ];
-  const type = supported.find((key) => msg?.[key]);
-  return type ? { type, media: msg[type] } : null;
+async function uploadBuffer(buffer, name, mime) {
+  const init = await api("/api/upload/init", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, size: buffer.length, mime })
+  }, 90000);
+  const id = init?.id;
+  if (!id) throw new Error("Upload init failed.");
+
+  for (let i = 0; i * CHUNK < buffer.length; i++) {
+    const chunk = buffer.subarray(i * CHUNK, (i + 1) * CHUNK);
+    await api("/api/upload/" + id + "/chunk?index=" + i, {
+      method: "PUT",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: chunk
+    }, 300000);
+  }
+
+  await api("/api/upload/" + id + "/complete", { method: "POST" }, 60000);
+
+  let status;
+  for (let i = 0; i < 120; i++) {
+    await sleep(1500);
+    status = await api("/api/upload/" + id, {}, 30000);
+    if (status?.status === "done") break;
+    if (status?.status === "error") throw new Error(status.error || "Upload processing failed.");
+  }
+  if (status?.status !== "done") throw new Error("Upload timed out.");
+
+  // file id: status-il undengil athu, illengil list-il ninnu name vech kandupidikkum
+  let fileId = status?.file?.id ?? status?.fileId ?? status?.file_id;
+  if (fileId == null) {
+    const list = await api("/api/files?view=files", {}, 30000);
+    const files = Array.isArray(list) ? list : list?.files || [];
+    fileId = (files.find((f) => f.name === name) || files[0])?.id;
+  }
+  if (fileId == null) throw new Error("Upload done but file id not found.");
+  return fileId;
 }
 
 module.exports = {
-  name: "url",
-  aliases: ["tourl", "upload"],
-  description: "Upload replied media and return a public URL",
-
-  async execute({ sock, jid, message, args = [] }) {
-    try {
-      const quoted = getQuotedMessage(message, jid);
-      if (!quoted) {
-        await sock.sendMessage(
-          jid,
-          { text: "Reply to an image, video, audio, sticker, or document with .url" },
-          { quoted: message }
-        );
-        return;
-      }
-
-      const found = getMediaType(quoted);
-      if (!found) {
-        await sock.sendMessage(
-          jid,
-          { text: "Unsupported file. Reply to an image, video, audio, sticker, or document." },
-          { quoted: message }
-        );
-        return;
-      }
-
-      await sock.sendMessage(jid, { text: "⏳ Uploading your file..." }, { quoted: message });
-
-      const baileys = await import("baileys");
-      const downloadMediaMessage = baileys.downloadMediaMessage;
-      if (typeof downloadMediaMessage !== "function") {
-        throw new Error("Baileys media download is unavailable");
-      }
-
-      const buffer = await downloadMediaMessage(quoted, "buffer", {}, {
-        logger: require("pino")({ level: "silent" }),
-        reuploadRequest: sock.updateMediaMessage,
-      });
-
-      if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
-        throw new Error("Downloaded media is empty");
-      }
-
-      const media = found.media;
-      const mimetype = media.mimetype || "application/octet-stream";
-      const filename =
-        String(media.fileName || args.join(" ").trim() || `galaxy-upload-${Date.now()}`)
-          .replace(/[\\r\\n"]/g, "_")
-          .slice(0, 180);
-
-      const form = new FormData();
-      form.append("file", new Blob([buffer], { type: mimetype }), filename);
-
-      const response = await fetch("https://galaxy.anuansad50.workers.dev/upload", {
-        method: "POST",
-        body: form,
-        signal: AbortSignal.timeout(120000),
-      });
-
-      let data;
-      try {
-        data = await response.json();
-      } catch {
-        throw new Error("Upload API returned an invalid response");
-      }
-
-      if (!response.ok || data?.success !== true || typeof data.url !== "string") {
-        throw new Error(data?.error || `Upload failed (HTTP ${response.status})`);
-      }
-
-      await sock.sendMessage(
+  name: "upload",
+  aliases: ["tourl", "ansadkl"],
+  description: "Upload replied media to Ansadkl Drive and get a link",
+  category: "Tools",
+  async execute({ sock, jid, message }) {
+    const media = getMedia(message);
+    if (!media) {
+      return sock.sendMessage(
         jid,
-        {
-          text: `✅ *File uploaded successfully!*
-
-🔗 ${data.url}`,
-          detectLinks: true,
-        },
+        { text: "Oru file/image/video/audio-ilekku reply cheythu .upload ayakkuka." },
         { quoted: message }
       );
-    } catch (error) {
-      console.error("[URL Plugin] Upload failed:", error?.stack || error);
-      await sock.sendMessage(
-        jid,
-        { text: "❌ Upload failed. Please try again or use a smaller file." },
-        { quoted: message }
-      ).catch(() => {});
     }
-  },
+
+    let statusMessage;
+    const editStatus = async (status) => {
+      if (statusMessage?.key) {
+        return sock.sendMessage(jid, { text: status, edit: statusMessage.key });
+      }
+    };
+
+    try {
+      const declared = Number(media.node.fileLength?.low ?? media.node.fileLength ?? 0);
+      if (declared > MAX_SIZE) throw new Error("File too large (max " + MAX_SIZE / 1024 / 1024 + " MB).");
+
+      statusMessage = await sock.sendMessage(jid, { text: "Uploading..." }, { quoted: message });
+
+      const downloadMediaMessage = await loadDownloader();
+      const buffer = await downloadMediaMessage(media.msg, "buffer", {});
+      if (!buffer?.length) throw new Error("Could not download the media.");
+      if (buffer.length > MAX_SIZE) throw new Error("File too large.");
+
+      const mime = media.node.mimetype || "application/octet-stream";
+      const ext = EXT[mime] || EXT[mime.split(";")[0]] || mime.split("/")[1]?.split(";")[0] || "bin";
+      const name = String(media.node.fileName || "galaxy-" + Date.now() + "." + ext)
+        .replace(/[\\/:*?"<>|]/g, "_").slice(0, 150);
+
+      const fileId = await uploadBuffer(buffer, name, mime);
+
+      const link = BASE + "/api/files/" + fileId + "/stream";
+      const dl = link + "?download=1";
+      const sizeMb = (buffer.length / 1024 / 1024).toFixed(2);
+
+      await editStatus(
+        "Upload complete!\n\nName: " + name + "\nSize: " + sizeMb + " MB\n\nView: " + link + "\nDownload: " + dl
+      );
+    } catch (error) {
+      console.error("[GALAXY-MD] Upload failed:", error);
+      const msg = "Upload failed: " + (error?.message || "unknown error");
+      try {
+        await editStatus(msg);
+      } catch {
+        await sock.sendMessage(jid, { text: msg }, { quoted: message });
+      }
+    }
+  }
 };
