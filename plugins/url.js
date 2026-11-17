@@ -80,29 +80,22 @@ async function uploadBuffer(buffer, name, mime) {
 
   await api("/api/upload/" + id + "/complete", { method: "POST" }, 60000);
 
-  let status;
+  let s;
   for (let i = 0; i < 120; i++) {
-    await sleep(1500);
-    status = await api("/api/upload/" + id, {}, 30000);
-    if (status?.status === "done") break;
-    if (status?.status === "error") throw new Error(status.error || "Upload processing failed.");
+    await sleep(1000);
+    s = await api("/api/upload/" + id, {}, 30000);
+    if (s?.status === "done") break;
+    if (s?.status === "error") throw new Error(s.error || "Upload processing failed.");
   }
-  if (status?.status !== "done") throw new Error("Upload timed out.");
+  if (s?.status !== "done") throw new Error("Upload timed out.");
 
-  let fileObj = status?.file;
-  if (!fileObj) {
-    const list = await api("/api/files?view=files", {}, 30000);
-    const files = Array.isArray(list) ? list : list?.files || [];
-    fileObj = files.find((f) => f.name === name) || files[0];
-  }
-  if (!fileObj) throw new Error("Upload done but file info not found.");
-  return fileObj;
+  return s;
 }
 
 module.exports = {
   name: "url",
   aliases: ["tourl", "ansadkl", "upload"],
-  description: "Upload replied media to Ansadkl Drive and get a DL link",
+  description: "Upload replied media to Ansadkl Drive and get a direct dl link",
   category: "Tools",
   async execute({ sock, jid, message }) {
     const media = getMedia(message);
@@ -137,10 +130,12 @@ module.exports = {
       const name = String(media.node.fileName || "galaxy-" + Date.now() + "." + ext)
         .replace(/[\\/:*?"<>|]/g, "_").slice(0, 150);
 
-      const fileObj = await uploadBuffer(buffer, name, mime);
+      const s = await uploadBuffer(buffer, name, mime);
 
+      // Status response-il ninnu file details / code kandupidikkunnu
+      const fileObj = s.file || s;
       const shareCode = fileObj.code || fileObj.slug || fileObj.shortId || fileObj.shareId || fileObj.id;
-      if (!shareCode) throw new Error("File share code not found.");
+      if (!shareCode) throw new Error("Share code not found in response.");
 
       const link = `${BASE}/dl/${shareCode}`;
 
