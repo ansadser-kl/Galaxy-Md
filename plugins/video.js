@@ -40,47 +40,33 @@ module.exports = {
     try {
       statusMessage = await sock.sendMessage(jid, { text: "Downloading..." }, { quoted: message });
 
-      const apiUrl = new URL("https://zellrayy.com/download/youtube");
+      const apiUrl = new URL("https://kiraxmd-api.onrender.com/api/ytv");
       apiUrl.searchParams.set("url", url);
-      apiUrl.searchParams.set("format", "mp4");
+      apiUrl.searchParams.set("quality", "best");
 
       const response = await fetch(apiUrl, {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(60000)
+        signal: AbortSignal.timeout(90000)
       });
 
       if (!response.ok) throw new Error("Downloader API returned HTTP " + response.status);
       const result = await response.json();
 
       const data = result?.result;
-      const downloadUrl = data?.download || data?.stream;
+      const downloadUrl = data?.download;
       if (result?.status !== true || typeof downloadUrl !== "string" ||
           !/^https?:\/\//i.test(downloadUrl)) {
         throw new Error("Could not get video download link from API.");
       }
 
-      // Prefer the direct download endpoint, with the stream URL as a fallback.
-      let download = await fetch(downloadUrl, {
+      const download = await fetch(downloadUrl, {
         headers: {
           "User-Agent": "Mozilla/5.0",
-          Accept: "video/mp4,application/octet-stream,*/*",
-          Referer: "https://zellrayy.com/"
+          Accept: "video/mp4,application/octet-stream,*/*"
         },
         signal: AbortSignal.timeout(300000),
         redirect: "follow"
       });
-
-      if ((!download.ok || !download.body) && data?.stream && data.stream !== downloadUrl) {
-        download = await fetch(data.stream, {
-          headers: {
-            "User-Agent": "Mozilla/5.0",
-            Accept: "video/mp4,application/octet-stream,*/*",
-            Referer: "https://zellrayy.com/"
-          },
-          signal: AbortSignal.timeout(300000),
-          redirect: "follow"
-        });
-      }
 
       if (!download.ok || !download.body) {
         throw new Error("Video download failed (HTTP " + download.status + ").");
@@ -93,21 +79,23 @@ module.exports = {
       await editStatus("Sending...");
 
       const title = String(data?.title || "YouTube Video").slice(0, 180);
-      const filename = String(data?.filename || "galaxy-video.mp4").replace(/[\\/:*?\"<>|]/g, "_").slice(0, 180);
-      const caption = title + "\nFormat: MP4";
+      const safeName = title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 120) || "galaxy-video";
+      const filename = safeName + ".mp4";
+      const quality = String(data?.quality || "").replace(/p+$/i, "p");
+      const caption = title + "\nFormat: MP4" + (quality ? "\nQuality: " + quality : "");
 
       if (stats.size > 180 * 1024 * 1024) {
         await sock.sendMessage(jid, {
           document: { url: tempFile },
           mimetype: "video/mp4",
-          fileName: filename.endsWith(".mp4") ? filename : filename + ".mp4",
+          fileName: filename,
           caption: caption + "\nSent as document because file exceeds 180 MB."
         }, { quoted: message });
       } else {
         await sock.sendMessage(jid, {
           video: { url: tempFile },
           mimetype: "video/mp4",
-          fileName: filename.endsWith(".mp4") ? filename : filename + ".mp4",
+          fileName: filename,
           caption
         }, { quoted: message });
       }
