@@ -6,11 +6,112 @@ const path = require("path");
 const { Readable } = require("stream");
 const { pipeline } = require("stream/promises");
 
+const TIMEOUT = 90000;
+const DL_TIMEOUT = 300000;
+const MAX_SIZE = 180 * 1024 * 1024;
+
+// Fast & powerful first (ividathe order)
+const APIS = [
+  {
+    name: "ZellRayy",
+    build: (url) => "https://zellrayy.com/download/youtube?url=" + encodeURIComponent(url) + "&format=mp4",
+    parse: (j) => ({
+      ok: j?.status === true,
+      url: j?.result?.download || j?.result?.stream,
+      title: j?.result?.title,
+      quality: j?.result?.quality || ""
+    })
+  },
+  {
+    name: "Kira",
+    build: (url) => "https://kiraxmd-api.onrender.com/api/ytv?url=" + encodeURIComponent(url) + "&quality=720",
+    parse: (j) => ({
+      ok: j?.status === true,
+      url: j?.result?.download,
+      title: j?.result?.title,
+      quality: j?.result?.quality || ""
+    })
+  },
+  {
+    name: "ZiaUl",
+    build: (url) => "https://apiziaul.vercel.app/api/downloader/ytmp4?url=" + encodeURIComponent(url),
+    parse: (j) => ({
+      ok: j?.status === true,
+      url: j?.result?.downloadUrl,
+      title: j?.result?.title,
+      quality: j?.result?.quality || ""
+    })
+  },
+  {
+    name: "XenoExe",
+    build: (url) => "https://xenosirapis.zone.id/api/youtube?url=" + encodeURIComponent(url),
+    parse: (j) => ({
+      ok: j?.status === true,
+      url: j?.downloadUrl,
+      title: j?.title,
+      quality: j?.quality || ""
+    })
+  }
+];
+
+async function getJson(url) {
+  const res = await fetch(url, {
+    headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
+    signal: AbortSignal.timeout(TIMEOUT)
+  });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return res.json();
+}
+
+async function downloadTo(url, file) {
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+      Accept: "video/mp4,application/octet-stream,*/*"
+    },
+    redirect: "follow",
+    signal: AbortSignal.timeout(DL_TIMEOUT)
+  });
+  if (!res.ok || !res.body) throw new Error("download HTTP " + res.status);
+
+  const len = Number(res.headers.get("content-length") || 0);
+  if (len > MAX_SIZE * 5) throw new Error("file too large");
+
+  await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(file));
+  const size = fs.statSync(file).size;
+  if (!size) throw new Error("empty file");
+}
+
+async function fetchVideo(url, file) {
+  const errors = [];
+
+  for (const api of APIS) {
+    try {
+      const json = await getJson(api.build(url));
+      const { ok, url: dl, title, quality } = api.parse(json);
+
+      if (!ok || typeof dl !== "string" || !/^https?:\/\//i.test(dl)) {
+        throw new Error("no valid link");
+      }
+
+      await downloadTo(dl, file);
+      return { api: api.name, title: String(title || "YouTube Video"), quality: String(quality || "") };
+    } catch (err) {
+      errors.push(api.name + ": " + (err?.message || "failed"));
+      console.warn("[GALAXY-MD] video API failed:", api.name, err?.message);
+      try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch {}
+    }
+  }
+
+  throw new Error("All APIs failed\n" + errors.join("\n"));
+}
+
 module.exports = {
   name: "video",
   aliases: [],
   description: "Download YouTube videos as MP4",
   category: "Downloader",
+
   async execute({ sock, jid, message, text, args }) {
     const input = String(text || args?.join(" ") || "").trim();
     let url = input.match(/https?:\/\/\S+/i)?.[0]?.replace(/[)>]+$/, "");
@@ -32,70 +133,39 @@ module.exports = {
     let statusMessage;
 
     const editStatus = async (status) => {
-      if (statusMessage?.key) {
-        return sock.sendMessage(jid, { text: status, edit: statusMessage.key });
+      try {
+        if (statusMessage?.key) {
+          await sock.sendMessage(jid, { text: status, edit: statusMessage.key });
+        }
+      } catch (err) {
+        console.warn("[GALAXY-MD] Failed to edit status message:", err?.message);
       }
     };
 
     try {
       statusMessage = await sock.sendMessage(jid, { text: "Downloading..." }, { quoted: message });
 
-      const apiUrl = new URL("https://kiraxmd-api.onrender.com/api/ytv");
-      apiUrl.searchParams.set("url", url);
-      apiUrl.searchParams.set("quality", "best");
-
-      const response = await fetch(apiUrl, {
-        headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(90000)
-      });
-
-      if (!response.ok) throw new Error("Downloader API returned HTTP " + response.status);
-      const result = await response.json();
-
-      const data = result?.result;
-      const downloadUrl = data?.download;
-      if (result?.status !== true || typeof downloadUrl !== "string" ||
-          !/^https?:\/\//i.test(downloadUrl)) {
-        throw new Error("Could not get video download link from API.");
-      }
-
-      const download = await fetch(downloadUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-          Accept: "video/mp4,application/octet-stream,*/*"
-        },
-        signal: AbortSignal.timeout(300000),
-        redirect: "follow"
-      });
-
-      if (!download.ok || !download.body) {
-        throw new Error("Video download failed (HTTP " + download.status + ").");
-      }
-
-      await pipeline(Readable.fromWeb(download.body), fs.createWriteStream(tempFile));
-      const stats = fs.statSync(tempFile);
-      if (!stats.size) throw new Error("The downloaded video is empty.");
+      const { title, quality } = await fetchVideo(url, tempFile);
 
       await editStatus("Sending...");
 
-      const title = String(data?.title || "YouTube Video").slice(0, 180);
       const safeName = title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 120) || "galaxy-video";
-      const filename = safeName + ".mp4";
-      const quality = String(data?.quality || "").replace(/p+$/i, "p");
-      const caption = title + "\nFormat: MP4" + (quality ? "\nQuality: " + quality : "");
+      const q = quality.replace(/p+$/i, "p");
+      const caption = title.slice(0, 180) + "\nFormat: MP4" + (q ? "\nQuality: " + q : "");
+      const size = fs.statSync(tempFile).size;
 
-      if (stats.size > 180 * 1024 * 1024) {
+      if (size > 180 * 1024 * 1024) {
         await sock.sendMessage(jid, {
           document: { url: tempFile },
           mimetype: "video/mp4",
-          fileName: filename,
+          fileName: safeName + ".mp4",
           caption: caption + "\nSent as document because file exceeds 180 MB."
         }, { quoted: message });
       } else {
         await sock.sendMessage(jid, {
           video: { url: tempFile },
           mimetype: "video/mp4",
-          fileName: filename,
+          fileName: safeName + ".mp4",
           caption
         }, { quoted: message });
       }
@@ -103,17 +173,9 @@ module.exports = {
       await editStatus("Download complete!");
     } catch (error) {
       console.error("[GALAXY-MD] Video download failed:", error);
-      try {
-        await editStatus("Download failed. Please try again.");
-      } catch {
-        await sock.sendMessage(
-          jid,
-          { text: "Download failed. Please try again." },
-          { quoted: message }
-        );
-      }
+      await editStatus("❌ Download failed!\n" + String(error?.message || error).slice(0, 300));
     } finally {
-      try { fs.unlinkSync(tempFile); } catch {}
+      try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch {}
     }
   }
 };
