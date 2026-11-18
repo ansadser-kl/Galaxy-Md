@@ -60,6 +60,16 @@ function loadDownloader() {
   throw new Error("Baileys downloadMediaMessage not found.");
 }
 
+
+// ffmpeg binary illaatha error (ENOENT) matram install msg; baaki ffmpeg-inte real error kaanikkum
+function ffmpegErrorText(error) {
+  if (error?.code === "ENOENT") {
+    return "FFmpeg install cheyyuka: Ubuntu/VPS: sudo apt install ffmpeg -y | Termux: pkg install ffmpeg";
+  }
+  const stderr = String(error?.stderr || "").trim().split("\n").slice(-4).join("\n");
+  return "FFmpeg error:\n" + (stderr || String(error?.message || error)).slice(0, 300);
+}
+
 module.exports = {
   name: "mp4",
   aliases: [],
@@ -109,12 +119,10 @@ module.exports = {
     } catch (error) {
       console.error("[GALAXY-MD] MP4 conversion failed:", error?.message || error);
       const reason = String(error?.message || error);
-      if (/ENOENT|ffmpeg/i.test(reason)) {
-        await send("❌ FFmpeg install cheyyuka: Ubuntu/VPS: sudo apt install ffmpeg -y | Termux: pkg install ffmpeg");
-      } else if (/Ith animated|static sticker/i.test(reason)) {
+      if (/Ith animated|static sticker/i.test(reason)) {
         await send(reason);
       } else {
-        await send("❌ MP4 conversion failed.\n" + reason.slice(0, 200));
+        await send("❌ MP4 conversion failed.\n" + ffmpegErrorText(error));
       }
     } finally {
       for (const file of [input, output]) {
