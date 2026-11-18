@@ -71,18 +71,21 @@ module.exports = {
         { quoted: message }
       );
 
-      const apiUrl = "https://yt-quality-api.vercel.app/api/ytmp4?url=" + encodeURIComponent(url);
+      const apiUrl = "https://youtube-com-3jtn.onrender.com/api/ytv?url=" + encodeURIComponent(url);
       const response = await fetch(apiUrl, {
         headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
-        signal: AbortSignal.timeout(60000)
+        signal: AbortSignal.timeout(90000)
       });
 
       if (!response.ok) throw new Error("API error");
       const data = await response.json();
       const result = data?.result;
-      const downloads = Array.isArray(result?.downloads)
-        ? result.downloads.filter(item => item && typeof item.url === "string" && item.url.trim())
-        : [];
+
+      // API: result.qualities = { "1080p": url, "720p": url, ... } -> list-aakki height order-il
+      const downloads = Object.entries(result?.qualities || {})
+        .filter(([, u]) => typeof u === "string" && /^https?:\/\//i.test(u))
+        .map(([quality, url]) => ({ quality, url }))
+        .sort((a, b) => (parseInt(b.quality, 10) || 0) - (parseInt(a.quality, 10) || 0));
 
       if (data?.status !== true || !downloads.length) throw new Error("API error");
 
