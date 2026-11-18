@@ -114,13 +114,13 @@ async function uploadBuffer(buffer, name, mime) {
   }
   if (status?.status !== "done" || !status.file?.hash) throw new Error("Upload timed out.");
 
-  return status.file; // { id, hash, name, size, link, ... }
+  return status.file;
 }
 
 module.exports = {
-  name: "upload",
-  aliases: ["tourl", "ansadkl"],
-  description: "Upload replied media or a URL to Ansadkl Drive and get a download link",
+  name: "url",
+  aliases: [],
+  description: "Upload replied media or a URL and get a download link",
   category: "Tools",
   async execute({ sock, jid, message, text, args }) {
     const input = String(text || args?.join(" ") || "").trim();
@@ -130,7 +130,7 @@ module.exports = {
     if (!url && !media) {
       return sock.sendMessage(
         jid,
-        { text: "Oru file-ilekku reply cheythu .upload ayakkuka, allenkil .upload <url> ayakkuka." },
+        { text: "Oru file-ilekku reply cheythu .url ayakkuka, allenkil .url <link> ayakkuka." },
         { quoted: message }
       );
     }
@@ -164,12 +164,8 @@ module.exports = {
 
       const file = await uploadBuffer(buffer, name, mime);
 
-      const link = BASE + "/dl/" + file.hash;
-      const sizeMb = (buffer.length / 1024 / 1024).toFixed(2);
-
-      await editStatus(
-        "Upload complete!\n\nName: " + file.name + "\nSize: " + sizeMb + " MB\n\nDownload: " + link
-      );
+      // link maathram
+      await editStatus(BASE + "/dl/" + file.hash);
     } catch (error) {
       console.error("[GALAXY-MD] Upload failed:", error);
       const msg = "Upload failed: " + (error?.message || "unknown error");
