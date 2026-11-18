@@ -27,7 +27,7 @@ function unwrap(m) {
   return cur;
 }
 
-// Reply cheytha message-il ninnu media edukkum
+// Reply cheytha message-il ninnu audio/video media edukkum
 function getQuotedMedia(message) {
   const own = unwrap(message?.message);
   const ctx =
@@ -39,6 +39,12 @@ function getQuotedMedia(message) {
   const quoted = unwrap(ctx?.quotedMessage);
   const type = MEDIA_TYPES.find((t) => quoted?.[t]);
   if (!quoted || !type) return null;
+
+  // Document aanel audio/video mimetype mathram accept cheyyum
+  if (type === "documentMessage") {
+    const mime = quoted[type]?.mimetype || "";
+    if (!mime.startsWith("audio/") && !mime.startsWith("video/")) return null;
+  }
 
   return {
     node: quoted[type],
@@ -71,7 +77,7 @@ async function cutSample(inFile, outFile) {
   return buf;
 }
 
-// Found aayaal title/artist/album edukkum, pala field names nokkum
+// Found aayaal title/artist/album edukkum
 function parseTrack(data) {
   const src = data?.result || data?.data || data;
   const title = src?.title || src?.track?.title || src?.music?.[0]?.title || "";
@@ -92,6 +98,10 @@ module.exports = {
 
     const media = getQuotedMedia(message);
     if (!media) return send("*Audio allenkil video-kku reply cheythu .find ayakkuka*");
+
+    // Download cheyyunnathinu munpe file size check cheyyunnu
+    const fileSize = Number(media.node?.fileLength || 0);
+    if (fileSize > MAX_INPUT) return send("❌ File valuthanu (Max 50MB).");
 
     const id = Date.now() + "-" + Math.random().toString(16).slice(2);
     const inFile = path.join(os.tmpdir(), "galaxy-find-in-" + id);
@@ -126,14 +136,16 @@ module.exports = {
       if (!res.ok) throw new Error("Music API HTTP " + res.status);
       const data = await res.json();
 
-      if (!data?.found) {
+      if (data?.found === false) {
         return editStatus("❌ Song kandilla.");
       }
 
       const { title, artist, album } = parseTrack(data);
       if (!title) {
-        // Field names manasilaayilla: raw response kaanikkum, athu paste cheythaal fix cheyyaam
-        return editStatus("⚠️ Song kitti, pakshe title field kittiyilla.\n" + JSON.stringify(data).slice(0, 500));
+        if (data?.found) {
+          return editStatus("⚠️ Song kitti, pakshe title field kittiyilla.\n" + JSON.stringify(data).slice(0, 500));
+        }
+        return editStatus("❌ Song kandilla.");
       }
 
       const caption =
@@ -141,20 +153,19 @@ module.exports = {
         `*Artist :* ${artist || "-"}\n` +
         `*Album :* ${album || "-"}`;
 
-      let thumb = null;
+      // Thumbnail download safe aayi cheyyunnu (fail aayaalum text ayakkum)
+      let image = null;
       try {
         const search = await yts(`${title} ${artist}`.trim());
-        thumb = search.videos?.[0]?.thumbnail || null;
+        const thumb = search.videos?.[0]?.thumbnail;
+        if (thumb) {
+          const imgRes = await fetch(thumb, { signal: AbortSignal.timeout(20000) });
+          if (imgRes.ok) image = Buffer.from(await imgRes.arrayBuffer());
+        }
       } catch {}
 
-      if (thumb) {
-        const imgRes = await fetch(thumb, { signal: AbortSignal.timeout(20000) });
-        if (imgRes.ok) {
-          const image = Buffer.from(await imgRes.arrayBuffer());
-          await sock.sendMessage(jid, { image, caption }, { quoted: message });
-        } else {
-          await send(caption);
-        }
+      if (image) {
+        await sock.sendMessage(jid, { image, caption }, { quoted: message });
       } else {
         await send(caption);
       }
