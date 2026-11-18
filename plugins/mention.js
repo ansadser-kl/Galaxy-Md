@@ -3,13 +3,12 @@
 const { spawn } = require("node:child_process");
 
 const AUDIOS = [
-  "https://galaxy.anuansad50.workers.dev/f/-1793084810671.galaxy-upload-1793084810583",
-  "https://galaxy.anuansad50.workers.dev/f/-1793084817481.galaxy-upload-1793084817415",
-  "https://galaxy.anuansad50.workers.dev/f/-1793084824776.galaxy-upload-1793084824729",
+  "https://ansadkl-file.onrender.com/dl/OIoqoSULg7lw",
+  "https://ansadkl-file.onrender.com/dl/ZHj3x8fj4PmH",
 ];
 
 const IMAGES = [
-  "https://galaxy.anuansad50.workers.dev/f/-1793085072726.galaxy-upload-1793085072674",
+  "https://ansadkl-file.onrender.com/dl/uJ-qp2b_0vOe",
 ];
 
 const TITLE = "GALAXY-MD";
@@ -64,18 +63,23 @@ async function convertToVoiceNote(inputBuffer) {
       "-vn", "-c:a", "libopus", "-application", "voip",
       "-b:a", "32k", "-ar", "48000", "-ac", "1", "-f", "ogg", "pipe:1",
     ], { stdio: ["pipe", "pipe", "pipe"] });
+
     const chunks = [];
     const errors = [];
-    ffmpeg.stdout.on("data", chunk => chunks.push(chunk));
-    ffmpeg.stderr.on("data", chunk => errors.push(chunk));
-    ffmpeg.on("error", error => reject(new Error("FFmpeg could not start: " + error.message)));
-    ffmpeg.on("close", code => {
-      if (code !== 0) return reject(new Error("FFmpeg audio conversion failed: " + Buffer.concat(errors).toString().trim()));
+    ffmpeg.stdout.on("data", (chunk) => chunks.push(chunk));
+    ffmpeg.stderr.on("data", (chunk) => errors.push(chunk));
+    ffmpeg.on("error", (error) => reject(new Error("FFmpeg could not start: " + error.message)));
+    ffmpeg.on("close", (code) => {
+      if (code !== 0) {
+        return reject(new Error("FFmpeg audio conversion failed: " + Buffer.concat(errors).toString().trim()));
+      }
       const output = Buffer.concat(chunks);
       if (!output.length) return reject(new Error("FFmpeg returned an empty voice note"));
       resolve(output);
     });
-    ffmpeg.stdin.on("error", error => { if (error.code !== "EPIPE") reject(error); });
+    ffmpeg.stdin.on("error", (error) => {
+      if (error.code !== "EPIPE") reject(error);
+    });
     ffmpeg.stdin.end(inputBuffer);
   });
 }
@@ -91,14 +95,16 @@ async function fetchBuffer(url) {
 module.exports = {
   name: "mention",
   aliases: [],
-  description: "Send random voice-note audio with thumbnail when the bot is mentioned",
+  description: "Send random voice-note audio with thumbnail when the bot or owner is mentioned",
   async execute() {},
 
-  async handleMessage({ sock, jid, message, text, config }) {
+  async handleMessage({ sock, jid, message, text, config = {} }) {
     if (message?.key?.fromMe || !jid?.endsWith("@g.us")) return false;
 
+    // Bot numbers + owner numbers
     const configuredNumbers = [
       config.botNumber,
+      config.ownerNumber,
       ...(Array.isArray(config.sudoNumbers) ? config.sudoNumbers : []),
     ].map(digits).filter(Boolean);
 
@@ -109,27 +115,27 @@ module.exports = {
     ].map(normalizeJid).filter(Boolean);
 
     const contexts = getMentionContexts(message);
-    const mentionedJids = contexts.flatMap((context) =>
-      Array.isArray(context.mentionedJid) ? context.mentionedJid : []
-    ).map(normalizeJid).filter(Boolean);
+    const mentionedJids = contexts
+      .flatMap((context) => (Array.isArray(context.mentionedJid) ? context.mentionedJid : []))
+      .map(normalizeJid)
+      .filter(Boolean);
 
     const mentionedNumbers = mentionedJids.map(digits).filter(Boolean);
-    const targets = new Set(configuredNumbers);
-    const directJidMatch = mentionedJids.some((mentioned) => botJids.includes(mentioned));
-    const numberMatch = mentionedNumbers.some((mentioned) =>
-      [...targets].some((target) => mentioned === target || mentioned.endsWith(target) || target.endsWith(mentioned))
+    const directJidMatch = mentionedJids.some((m) => botJids.includes(m));
+    const numberMatch = mentionedNumbers.some((m) =>
+      configuredNumbers.some((t) => m === t || m.endsWith(t) || t.endsWith(m))
     );
-    const textMatch = [...targets].some((number) => String(text || "").includes("@" + number));
-    const isMentioned = directJidMatch || numberMatch || textMatch;
+    const textMatch = configuredNumbers.some((number) => String(text || "").includes("@" + number));
 
-    if (!isMentioned) return false;
+    if (!(directJidMatch || numberMatch || textMatch)) return false;
 
-    console.log("[GALAXY-MD] Bot mention detected; preparing audio reply.");
+    console.log("[GALAXY-MD] Bot/owner mention detected; preparing audio reply.");
 
     try {
       const audioUrl = AUDIOS[Math.floor(Math.random() * AUDIOS.length)];
       const imageUrl = IMAGES[Math.floor(Math.random() * IMAGES.length)];
-      const [audio, thumbnail] = await Promise.all([
+
+      const [sourceAudio, thumbnail] = await Promise.all([
         fetchBuffer(audioUrl),
         fetchBuffer(imageUrl).catch((error) => {
           console.warn("[GALAXY-MD] Mention thumbnail unavailable:", error.message || error);
