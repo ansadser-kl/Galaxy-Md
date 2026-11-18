@@ -101,16 +101,28 @@ module.exports = {
 
       fs.writeFileSync(input, buffer);
 
-      // Even dimension + yuv420p venam MP4-kku
-      await run(FFMPEG, [
-        "-y", "-i", input,
-        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-        "-movflags", "faststart",
-        "-pix_fmt", "yuv420p",
-        "-c:v", "libx264",
-        "-an",
-        output,
-      ], { timeout: 120000 });
+      // Animated webp decode: libwebp_anim first, illenkil default decoder
+      const decoders = [["-c:v", "libwebp_anim"], []];
+      let lastError;
+      for (const dec of decoders) {
+        try {
+          await run(FFMPEG, [
+            "-y", ...dec, "-i", input,
+            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-movflags", "faststart",
+            "-pix_fmt", "yuv420p",
+            "-c:v", "libx264",
+            "-an",
+            output,
+          ], { timeout: 120000 });
+          lastError = null;
+          break;
+        } catch (e) {
+          lastError = e;
+          try { if (fs.existsSync(output)) fs.unlinkSync(output); } catch {}
+        }
+      }
+      if (lastError) throw lastError;
 
       const video = fs.readFileSync(output);
       if (!video.length) throw new Error("FFmpeg produced an empty MP4 file.");
@@ -122,7 +134,7 @@ module.exports = {
       if (/Ith animated|static sticker/i.test(reason)) {
         await send(reason);
       } else {
-        await send("❌ MP4 conversion failed.\n" + ffmpegErrorText(error));
+        await send("❌ MP4 conversion failed.\n" + ffmpegErrorText(error) + "\n(debug: webp " + (fs.existsSync(input) ? fs.statSync(input).size : 0) + " bytes)");
       }
     } finally {
       for (const file of [input, output]) {
