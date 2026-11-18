@@ -91,6 +91,19 @@ function parseTrack(data) {
   };
 }
 
+// API response-il thumbnail/cover url undengil edukkum (field name vyathyaasam nokkum)
+function apiThumbnail(data) {
+  const src = data?.result || data?.data || data;
+  const track = src?.music?.[0] || src?.track || src;
+  const candidates = [
+    track?.coverart, src?.coverart, track?.background, src?.background,
+    track?.thumbnail, track?.thumb, track?.image, track?.cover, track?.artwork,
+    track?.album?.cover, track?.album?.thumbnail, track?.album?.image,
+    src?.thumbnail, src?.thumb, src?.image, src?.cover, src?.artwork,
+  ];
+  return candidates.find((u) => typeof u === "string" && /^https?:\/\//i.test(u)) || null;
+}
+
 // yt-search optional: illenkil thumbnail illaathe thaan work aakum
 async function findThumbnail(query) {
   let yts;
@@ -181,7 +194,7 @@ module.exports = {
         `*Album :* ${album || "-"}` +
         (release ? `\n*Release :* ${release}` : "");
 
-      const thumbUrl = await findThumbnail(`${title} ${artist}`.trim());
+      const thumbUrl = apiThumbnail(data) || (await findThumbnail(`${title} ${artist}`.trim()));
       const image = thumbUrl ? await fetchImage(thumbUrl) : null;
 
       if (image) {
