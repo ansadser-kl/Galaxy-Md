@@ -2,13 +2,12 @@
 
 const BASE = "https://ansadkl-file.onrender.com";
 const CHUNK = 8 * 1024 * 1024;
-const MAX_SIZE = 100 * 1024 * 1024;
+const MAX_SIZE = 100 * 1024 * 1024; // bot memory kaaranam, venel koottaam
 
 const EXT = {
   "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif",
   "video/mp4": "mp4", "video/3gpp": "3gp", "audio/mpeg": "mp3", "audio/mp4": "m4a",
-  "audio/ogg": "ogg", "audio/ogg; codecs=opus": "ogg", "application/pdf": "pdf",
-  "application/zip": "zip", "text/plain": "txt"
+  "audio/ogg": "ogg", "application/pdf": "pdf", "application/zip": "zip", "text/plain": "txt"
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -60,7 +59,7 @@ async function loadDownloader() {
   throw new Error("Baileys downloadMediaMessage not found.");
 }
 
-async function uploadAndGetHash(buffer, name, mime) {
+async function uploadBuffer(buffer, name, mime) {
   const init = await api("/api/upload/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -70,51 +69,38 @@ async function uploadAndGetHash(buffer, name, mime) {
   if (!id) throw new Error("Upload init failed.");
 
   for (let i = 0; i * CHUNK < buffer.length; i++) {
-    const chunk = buffer.subarray(i * CHUNK, (i + 1) * CHUNK);
     await api("/api/upload/" + id + "/chunk?index=" + i, {
       method: "PUT",
       headers: { "Content-Type": "application/octet-stream" },
-      body: chunk
+      body: buffer.subarray(i * CHUNK, (i + 1) * CHUNK)
     }, 300000);
   }
 
   await api("/api/upload/" + id + "/complete", { method: "POST" }, 60000);
 
   let status;
-  for (let i = 0; i < 120; i++) {
+  for (let i = 0; i < 200; i++) {
     await sleep(1500);
     status = await api("/api/upload/" + id, {}, 30000);
     if (status?.status === "done") break;
     if (status?.status === "error") throw new Error(status.error || "Upload processing failed.");
   }
-  if (status?.status !== "done") throw new Error("Upload timed out.");
+  if (status?.status !== "done" || !status.file?.id) throw new Error("Upload timed out.");
 
-  // Status object-il ninnu file hash/id edukkan nokkuvnu, illengil list edukkum
-  let fileHash = status?.h || status?.file?.h || status?.id;
-
-  if (!fileHash) {
-    const listRes = await api("/api/files?view=files", {}, 30000);
-    const files = Array.isArray(listRes) ? listRes : listRes?.files || [];
-    // Name match cheyyunnatheo anengil list-ile adhyathe file-o edukkunnu
-    const matchedFile = files.find((f) => f.n === name) || files[0];
-    fileHash = matchedFile?.h || matchedFile?.id;
-  }
-
-  if (!fileHash) throw new Error("File hash (h) could not be retrieved.");
-  return fileHash;
+  return status.file; // { id, hash, name, size, ... }
 }
 
 module.exports = {
-  name: "url",
-  aliases: ["tourl", "ansadkl", "upload"],
-  description: "Upload replied media to Ansadkl Drive and get a direct dl link",
+  name: "upload",
+  aliases: ["tourl", "ansadkl"],
+  description: "Upload replied media to Ansadkl Drive and get a download link",
   category: "Tools",
   async execute({ sock, jid, message }) {
     const media = getMedia(message);
     if (!media) {
       return sock.sendMessage(
         jid,
-        { text: "Oru file/image/video/audio-ilekku reply cheythu .url ayakkuka." },
+        { text: "Oru file/image/video/audio-ilekku reply cheythu .upload ayakkuka." },
         { quoted: message }
       );
     }
@@ -142,11 +128,14 @@ module.exports = {
       const name = String(media.node.fileName || "galaxy-" + Date.now() + "." + ext)
         .replace(/[\\/:*?"<>|]/g, "_").slice(0, 150);
 
-      const fileHash = await uploadAndGetHash(buffer, name, mime);
+      const file = await uploadBuffer(buffer, name, mime);
 
-      const link = `${BASE}/dl/${fileHash}`;
+      const downloadLink = BASE + "/api/files/" + file.id + "/stream?download=1";
+      const sizeMb = (buffer.length / 1024 / 1024).toFixed(2);
 
-      await editStatus(link);
+      await editStatus(
+        "Upload complete!\n\nName: " + file.name + "\nSize: " + sizeMb + " MB\n\nDownload: " + downloadLink
+      );
     } catch (error) {
       console.error("[GALAXY-MD] Upload failed:", error);
       const msg = "Upload failed: " + (error?.message || "unknown error");
