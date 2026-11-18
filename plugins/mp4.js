@@ -8,7 +8,9 @@ const { promisify } = require("util");
 
 const run = promisify(execFile);
 const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
+const ANIM_DUMP = process.env.ANIM_DUMP_PATH || "anim_dump";
 const MAX_INPUT = 20 * 1024 * 1024;
+const FPS = 15;
 
 function unwrap(m) {
   let cur = m || {};
@@ -60,14 +62,21 @@ function loadDownloader() {
   throw new Error("Baileys downloadMediaMessage not found.");
 }
 
+// Animated WebP-yude frames PNG aayi dump cheyyum (libwebp tools: anim_dump)
+async function dumpFrames(input, folder) {
+  fs.mkdirSync(folder, { recursive: true });
+  await run(ANIM_DUMP, ["-folder", folder, "-prefix", "f_", input], { timeout: 60000 });
+  const frames = fs.readdirSync(folder).filter((f) => f.endsWith(".png")).sort();
+  if (!frames.length) throw new Error("anim_dump frames undaakkiyilla.");
+  return frames;
+}
 
-// ffmpeg binary illaatha error (ENOENT) matram install msg; baaki ffmpeg-inte real error kaanikkum
 function ffmpegErrorText(error) {
   if (error?.code === "ENOENT") {
-    return "FFmpeg install cheyyuka: Ubuntu/VPS: sudo apt install ffmpeg -y | Termux: pkg install ffmpeg";
+    return "Install cheyyuka: sudo apt install ffmpeg webp -y";
   }
   const stderr = String(error?.stderr || "").trim().split("\n").slice(-4).join("\n");
-  return "FFmpeg error:\n" + (stderr || String(error?.message || error)).slice(0, 300);
+  return stderr || String(error?.message || error).slice(0, 300);
 }
 
 module.exports = {
@@ -86,6 +95,7 @@ module.exports = {
 
     const id = Date.now() + "-" + Math.random().toString(16).slice(2);
     const input = path.join(os.tmpdir(), "galaxy-mp4-in-" + id + ".webp");
+    const framesDir = path.join(os.tmpdir(), "galaxy-mp4-frames-" + id);
     const output = path.join(os.tmpdir(), "galaxy-mp4-out-" + id + ".mp4");
 
     try {
@@ -94,49 +104,37 @@ module.exports = {
       if (!buffer?.length) throw new Error("Sticker download returned empty data.");
       if (buffer.length > MAX_INPUT) throw new Error("Sticker too large.");
 
-      // Static sticker aano nokkum: animated alla enkil convert cheyyilla
       if (sticker.node.isAnimated === false || !isAnimatedWebp(buffer)) {
         return send("Ith animated sticker alla, static sticker aanu. Animation ulla sticker-il reply cheyyuka.");
       }
-
       fs.writeFileSync(input, buffer);
 
-      // Animated webp decode: libwebp_anim first, illenkil default decoder
-      const decoders = [["-c:v", "libwebp_anim"], []];
-      let lastError;
-      for (const dec of decoders) {
-        try {
-          await run(FFMPEG, [
-            "-y", ...dec, "-i", input,
-            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-            "-movflags", "faststart",
-            "-pix_fmt", "yuv420p",
-            "-c:v", "libx264",
-            "-an",
-            output,
-          ], { timeout: 120000 });
-          lastError = null;
-          break;
-        } catch (e) {
-          lastError = e;
-          try { if (fs.existsSync(output)) fs.unlinkSync(output); } catch {}
-        }
-      }
-      if (lastError) throw lastError;
+      const frames = await dumpFrames(input, framesDir);
+      const firstName = frames[0];
+      const realPattern = path.join(framesDir, firstName.replace(/\d+(?=\.png$)/, "%0" + firstName.match(/\d+(?=\.png$)/)[0].length + "d"));
+
+      await run(FFMPEG, [
+        "-y",
+        "-framerate", String(FPS),
+        "-i", realPattern,
+        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "faststart",
+        "-an",
+        output,
+      ], { timeout: 120000 });
 
       const video = fs.readFileSync(output);
-      if (!video.length) throw new Error("FFmpeg produced an empty MP4 file.");
+      if (!video.length) throw new Error("MP4 output empty.");
 
       await sock.sendMessage(jid, { video, mimetype: "video/mp4", caption: "" }, { quoted: message });
     } catch (error) {
       console.error("[GALAXY-MD] MP4 conversion failed:", error?.message || error);
-      const reason = String(error?.message || error);
-      if (/Ith animated|static sticker/i.test(reason)) {
-        await send(reason);
-      } else {
-        await send("❌ MP4 conversion failed.\n" + ffmpegErrorText(error) + "\n(debug: webp " + (fs.existsSync(input) ? fs.statSync(input).size : 0) + " bytes)");
-      }
+      const code = error?.code === "ENOENT" ? "anim_dump illa" : "";
+      await send("❌ MP4 conversion failed.\n" + (code || "") + ffmpegErrorText(error));
     } finally {
+      try { fs.rmSync(framesDir, { recursive: true, force: true }); } catch {}
       for (const file of [input, output]) {
         try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch {}
       }
