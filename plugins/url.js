@@ -11,6 +11,7 @@ const EXT = {
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const cleanName = (s) => String(s).replace(/[\\/:*?"<>|]/g, "_").slice(0, 150);
 
 async function api(pathname, options = {}, timeout = 60000) {
   const res = await fetch(BASE + pathname, { ...options, signal: AbortSignal.timeout(timeout) });
@@ -35,7 +36,6 @@ function getMedia(message) {
 
   if (quoted && pick(quoted)) {
     return {
-      type: pick(quoted),
       node: quoted[pick(quoted)],
       msg: {
         key: { remoteJid: message.key.remoteJid, id: ctx.stanzaId, participant: ctx.participant },
@@ -43,9 +43,7 @@ function getMedia(message) {
       }
     };
   }
-  if (own && pick(own)) {
-    return { type: pick(own), node: own[pick(own)], msg: message };
-  }
+  if (own && pick(own)) return { node: own[pick(own)], msg: message };
   return null;
 }
 
@@ -57,6 +55,35 @@ async function loadDownloader() {
     } catch {}
   }
   throw new Error("Baileys downloadMediaMessage not found.");
+}
+
+async function fetchUrl(url) {
+  const res = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0", Accept: "*/*" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(300000)
+  });
+  if (!res.ok) throw new Error("URL download failed (HTTP " + res.status + ").");
+
+  const len = Number(res.headers.get("content-length") || 0);
+  if (len > MAX_SIZE) throw new Error("File too large (max " + MAX_SIZE / 1024 / 1024 + " MB).");
+
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (!buffer.length) throw new Error("The URL returned an empty file.");
+  if (buffer.length > MAX_SIZE) throw new Error("File too large.");
+
+  const mime = (res.headers.get("content-type") || "application/octet-stream").split(";")[0].trim();
+  const cd = res.headers.get("content-disposition") || "";
+  let name =
+    decodeURIComponent(cd.match(/filename\*=UTF-8''([^;]+)/i)?.[1] || "") ||
+    cd.match(/filename="?([^";]+)"?/i)?.[1] || "";
+  if (!name) {
+    try { name = decodeURIComponent(new URL(url).pathname.split("/").pop() || ""); } catch {}
+  }
+  if (!name || !name.includes(".")) {
+    name = (name || "galaxy-" + Date.now()) + "." + (EXT[mime] || mime.split("/")[1] || "bin");
+  }
+  return { buffer, mime, name: cleanName(name) };
 }
 
 async function uploadBuffer(buffer, name, mime) {
@@ -85,22 +112,25 @@ async function uploadBuffer(buffer, name, mime) {
     if (status?.status === "done") break;
     if (status?.status === "error") throw new Error(status.error || "Upload processing failed.");
   }
-  if (status?.status !== "done" || !status.file?.id) throw new Error("Upload timed out.");
+  if (status?.status !== "done" || !status.file?.hash) throw new Error("Upload timed out.");
 
-  return status.file; // { id, hash, name, size, ... }
+  return status.file; // { id, hash, name, size, link, ... }
 }
 
 module.exports = {
   name: "upload",
   aliases: ["tourl", "ansadkl"],
-  description: "Upload replied media to Ansadkl Drive and get a download link",
+  description: "Upload replied media or a URL to Ansadkl Drive and get a download link",
   category: "Tools",
-  async execute({ sock, jid, message }) {
-    const media = getMedia(message);
-    if (!media) {
+  async execute({ sock, jid, message, text, args }) {
+    const input = String(text || args?.join(" ") || "").trim();
+    const url = input.match(/https?:\/\/\S+/i)?.[0]?.replace(/[)>]+$/, "");
+    const media = url ? null : getMedia(message);
+
+    if (!url && !media) {
       return sock.sendMessage(
         jid,
-        { text: "Oru file/image/video/audio-ilekku reply cheythu .upload ayakkuka." },
+        { text: "Oru file-ilekku reply cheythu .upload ayakkuka, allenkil .upload <url> ayakkuka." },
         { quoted: message }
       );
     }
@@ -113,28 +143,32 @@ module.exports = {
     };
 
     try {
-      const declared = Number(media.node.fileLength?.low ?? media.node.fileLength ?? 0);
-      if (declared > MAX_SIZE) throw new Error("File too large (max " + MAX_SIZE / 1024 / 1024 + " MB).");
-
       statusMessage = await sock.sendMessage(jid, { text: "Uploading..." }, { quoted: message });
 
-      const downloadMediaMessage = await loadDownloader();
-      const buffer = await downloadMediaMessage(media.msg, "buffer", {});
-      if (!buffer?.length) throw new Error("Could not download the media.");
-      if (buffer.length > MAX_SIZE) throw new Error("File too large.");
+      let buffer, mime, name;
+      if (url) {
+        ({ buffer, mime, name } = await fetchUrl(url));
+      } else {
+        const declared = Number(media.node.fileLength?.low ?? media.node.fileLength ?? 0);
+        if (declared > MAX_SIZE) throw new Error("File too large (max " + MAX_SIZE / 1024 / 1024 + " MB).");
 
-      const mime = media.node.mimetype || "application/octet-stream";
-      const ext = EXT[mime] || EXT[mime.split(";")[0]] || mime.split("/")[1]?.split(";")[0] || "bin";
-      const name = String(media.node.fileName || "galaxy-" + Date.now() + "." + ext)
-        .replace(/[\\/:*?"<>|]/g, "_").slice(0, 150);
+        const downloadMediaMessage = await loadDownloader();
+        buffer = await downloadMediaMessage(media.msg, "buffer", {});
+        if (!buffer?.length) throw new Error("Could not download the media.");
+        if (buffer.length > MAX_SIZE) throw new Error("File too large.");
+
+        mime = media.node.mimetype || "application/octet-stream";
+        const ext = EXT[mime] || EXT[mime.split(";")[0]] || mime.split("/")[1]?.split(";")[0] || "bin";
+        name = cleanName(media.node.fileName || "galaxy-" + Date.now() + "." + ext);
+      }
 
       const file = await uploadBuffer(buffer, name, mime);
 
-      const downloadLink = BASE + "/api/files/" + file.id + "/stream?download=1";
+      const link = BASE + "/dl/" + file.hash;
       const sizeMb = (buffer.length / 1024 / 1024).toFixed(2);
 
       await editStatus(
-        "Upload complete!\n\nName: " + file.name + "\nSize: " + sizeMb + " MB\n\nDownload: " + downloadLink
+        "Upload complete!\n\nName: " + file.name + "\nSize: " + sizeMb + " MB\n\nDownload: " + link
       );
     } catch (error) {
       console.error("[GALAXY-MD] Upload failed:", error);
