@@ -1,143 +1,166 @@
 "use strict";
 
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { Readable } = require("stream");
-const { pipeline } = require("stream/promises");
+const TIMEOUT = 60000;
+const DL_TIMEOUT = 300000;
+const MAX_IMAGE = 20 * 1024 * 1024;
+const MAX_VIDEO = 180 * 1024 * 1024;
 
-function safeFilename(value) {
-  return String(value || "pinterest-media")
-    .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120) || "pinterest-media";
+const clean = (u) => String(u || "").replace(/\\\//g, "/").replace(/&amp;/g, "&");
+const isUrl = (u) => typeof u === "string" && /^https?:\/\//i.test(clean(u));
+
+// Video-kku munpu: direct video field, pinne media/videos list-il type video
+function findVideo(j) {
+  const candidates = [
+    j?.videoUrl, j?.video, j?.result?.video, j?.result?.videoUrl,
+    j?.result?.hd, j?.result?.sd, j?.result?.download,
+    j?.result?.videos?.[0]?.url, j?.videos?.[0]?.url,
+    j?.result?.media?.find?.((m) => m?.type === "video")?.url,
+    j?.result?.data?.find?.((m) => m?.type === "video")?.url,
+    j?.media?.find?.((m) => m?.type === "video")?.url
+  ];
+  if (j?.type === "video" && j?.downloadUrl) candidates.unshift(j.downloadUrl);
+  if (j?.result?.type === "video" && j?.result?.url) candidates.unshift(j.result.url);
+  return candidates.map(clean).find(isUrl) || "";
+}
+
+// Image-kku: image field
+function findImage(j) {
+  const candidates = [
+    j?.downloadUrl, j?.url, j?.result?.image, j?.result?.thumbnail, j?.thumbnail
+  ];
+  return candidates.map(clean).find(isUrl) || "";
+}
+
+const APIS = [
+  {
+    name: "XenoExe",
+    build: (url) => "https://xenosirapis.zone.id/api/klickpin?url=" + encodeURIComponent(url),
+    ok: (j) => j?.status === true
+  },
+  {
+    name: "Nexray",
+    build: (url) => "https://api.nexray.eu.cc/downloader/pinterest?url=" + encodeURIComponent(url),
+    ok: (j) => j?.status === true
+  },
+  {
+    name: "JerryCoder",
+    build: (url) => "https://jerrycoder.oggyapi.workers.dev/down/pinterest?url=" + encodeURIComponent(url),
+    ok: (j) => j?.status === "success"
+  }
+];
+
+async function getJson(url) {
+  const res = await fetch(url, {
+    headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
+    signal: AbortSignal.timeout(TIMEOUT)
+  });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return res.json();
+}
+
+async function downloadBuffer(url, max) {
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+      Accept: "video/mp4,image/*,*/*"
+    },
+    redirect: "follow",
+    signal: AbortSignal.timeout(DL_TIMEOUT)
+  });
+  if (!res.ok) throw new Error("download HTTP " + res.status);
+
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (!buffer.length) throw new Error("empty file");
+  if (buffer.length > max) throw new Error("file too large");
+  return buffer;
+}
+
+async function fetchPin(url) {
+  const errors = [];
+
+  for (const api of APIS) {
+    try {
+      const json = await getJson(api.build(url));
+      if (!api.ok(json)) throw new Error("API status false");
+
+      const title = String(json?.title || json?.result?.title || "").trim();
+
+      // 1. Video first
+      const video = findVideo(json);
+      if (video) {
+        const buffer = await downloadBuffer(video, MAX_VIDEO);
+        return { kind: "video", api: api.name, buffer, title };
+      }
+
+      // 2. Illenkil image
+      const image = findImage(json);
+      if (image) {
+        const buffer = await downloadBuffer(image, MAX_IMAGE);
+        return { kind: "image", api: api.name, buffer, title };
+      }
+
+      throw new Error("no media link");
+    } catch (err) {
+      errors.push(api.name + ": " + (err?.message || "failed"));
+      console.warn("[GALAXY-MD] pinterest API failed:", api.name, err?.message);
+    }
+  }
+
+  throw new Error("All APIs failed\n" + errors.join("\n"));
 }
 
 module.exports = {
   name: "pinterest",
-  aliases: ["pin", "pindl"],
-  description: "Download Pinterest videos and images",
+  aliases: ["pin"],
+  description: "Download Pinterest images and videos",
   category: "Downloader",
 
   async execute({ sock, jid, message, text, args }) {
     const input = String(text || args?.join(" ") || "").trim();
-    const url = input.match(/https?:\/\/\S+/i)?.[0]?.replace(/[)>.,]+$/, "");
+    const url = input.match(/https?:\/\/\S+/i)?.[0]?.replace(/[)>]+$/, "");
 
-    if (!url || !/(^|\.)((www|pin)\.)?pinterest\.com|(^|\.)pin\.it/i.test(new URL(url).hostname)) {
+    if (!url || !/(pinterest\.[a-z.]+|pin\.it)/i.test(url)) {
       return sock.sendMessage(
         jid,
-        {
-          text: "📌 *Pinterest Downloader*\n\nSend a Pinterest video or image link.\nExample: .pinterest https://pin.it/xxxxx"
-        },
+        { text: "Please provide a valid Pinterest link!\nExample: .pinterest https://www.pinterest.com/pin/xxxxx/\nAlias: .pin <link>" },
         { quoted: message }
       );
     }
 
-    let tempFile;
     let statusMessage;
     const editStatus = async (status) => {
-      if (statusMessage?.key) {
-        await sock.sendMessage(jid, { text: status, edit: statusMessage.key });
+      try {
+        if (statusMessage?.key) {
+          await sock.sendMessage(jid, { text: status, edit: statusMessage.key });
+        }
+      } catch (err) {
+        console.warn("[GALAXY-MD] Failed to edit pinterest status:", err?.message);
       }
     };
 
     try {
-      statusMessage = await sock.sendMessage(
-        jid,
-        { text: "📌 Fetching Pinterest media..." },
-        { quoted: message }
-      );
+      statusMessage = await sock.sendMessage(jid, { text: "Downloading..." }, { quoted: message });
 
-      const apiUrl = new URL("https://api.nexray.eu.cc/downloader/pinterest");
-      apiUrl.searchParams.set("url", url);
+      const { kind, buffer, title } = await fetchPin(url);
+      const caption = title ? title.slice(0, 500) : "";
 
-      const apiResponse = await fetch(apiUrl, {
-        headers: { "User-Agent": "Mozilla/5.0" },
-        signal: AbortSignal.timeout(60000)
-      });
-
-      if (!apiResponse.ok) throw new Error("Pinterest API returned HTTP " + apiResponse.status);
-      const payload = await apiResponse.json();
-      const result = payload?.result;
-
-      if (payload?.status !== true || !result) {
-        throw new Error("Pinterest API did not return media.");
-      }
-
-      const mediaUrl = result.video || result.image || result.media || result.url;
-      if (typeof mediaUrl !== "string" || !/^https?:\/\//i.test(mediaUrl)) {
-        throw new Error("No valid media URL was returned.");
-      }
-
-      const isVideo = Boolean(result.video) || /\.mp4(?:[?#]|$)/i.test(mediaUrl);
-      const extension = isVideo ? ".mp4" : ".jpg";
-      tempFile = path.join(
-        os.tmpdir(),
-        "galaxy-pinterest-" + Date.now() + "-" + Math.random().toString(16).slice(2) + extension
-      );
-
-      await editStatus("⬇️ Downloading: " + String(result.title || "Pinterest media"));
-
-      const mediaResponse = await fetch(mediaUrl, {
-        headers: { "User-Agent": "Mozilla/5.0", "Accept": "*/*" },
-        redirect: "follow",
-        signal: AbortSignal.timeout(300000)
-      });
-
-      if (!mediaResponse.ok || !mediaResponse.body) {
-        throw new Error("Media download failed (HTTP " + mediaResponse.status + ").");
-      }
-
-      await pipeline(Readable.fromWeb(mediaResponse.body), fs.createWriteStream(tempFile));
-      const stats = fs.statSync(tempFile);
-      if (!stats.size) throw new Error("Downloaded media is empty.");
-
-      const title = String(result.title || "Pinterest media").slice(0, 180);
-      const description = String(result.description || "").slice(0, 700);
-      const caption = "📌 *" + title + "*" + (description ? "\n\n" + description : "");
-
-      await editStatus("📤 Sending media...");
-
-      if (isVideo) {
-        await sock.sendMessage(
-          jid,
-          {
-            video: { url: tempFile },
-            mimetype: "video/mp4",
-            fileName: safeFilename(title) + ".mp4",
-            caption
-          },
-          { quoted: message }
-        );
+      if (kind === "video") {
+        await sock.sendMessage(jid, {
+          video: buffer,
+          mimetype: "video/mp4",
+          caption
+        }, { quoted: message });
       } else {
-        await sock.sendMessage(
-          jid,
-          {
-            image: { url: tempFile },
-            mimetype: "image/jpeg",
-            caption
-          },
-          { quoted: message }
-        );
+        await sock.sendMessage(jid, {
+          image: buffer,
+          caption
+        }, { quoted: message });
       }
 
-      await editStatus("✅ Pinterest download complete.");
+      await editStatus("Download complete!");
     } catch (error) {
-      console.error("[GALAXY-MD] Pinterest download failed:", error?.message || error);
-      try {
-        await editStatus("❌ Pinterest download failed. The API may be unavailable or this pin may not be downloadable.");
-      } catch {
-        await sock.sendMessage(
-          jid,
-          { text: "❌ Pinterest download failed. Please try again later." },
-          { quoted: message }
-        );
-      }
-    } finally {
-      if (tempFile) {
-        try { fs.unlinkSync(tempFile); } catch {}
-      }
+      console.error("[GALAXY-MD] Pinterest download failed:", error);
+      await editStatus("❌ Download failed!\n" + String(error?.message || error).slice(0, 300));
     }
   }
 };
