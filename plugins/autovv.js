@@ -165,6 +165,7 @@ module.exports = {
 
     const vv = extractViewOnce(message.message);
     if (!vv) return false;
+    console.log("[GALAXY-MD] autovv: view once detected from", key.remoteJid, "-> target", target);
 
     const dedup = key.remoteJid + ":" + key.id;
     if (!firstTime(dedup)) return false;
