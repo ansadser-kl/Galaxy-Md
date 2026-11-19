@@ -46,7 +46,7 @@ function getQuotedMessage(message, jid) {
 }
 
 function isVoiceNoteRequest(text) {
-  return /(?:voice\s*note|voice\s*message|\bptt\b|\bvn\b|voice\s*note\s*aakk|voice\s*note\s*akk|vn\s*aakk|vn\s*akk|വോയ്സ്\s*നോട്ട്|വോയിസ്\s*നോട്ട്|വോയ്സ്\s*മെസേജ്|വോയിസ്\s*മെസേജ്)/i.test(String(text || ""));
+  return /(?:voice\s*note|voice\s*message|\bptt\b|\bvn\b|voice\s*note\s*aakk|voice\s*note\s*akk|vn\s*aakk|vn\s*akk|വോയ്സ്\s*നോട്ട്|വോയിസ്\s*നോട്ട്|വോയ്സ്\s*മെസേജ്|വോയ്സ്\s*മെസേജ്)/i.test(String(text || ""));
 }
 
 function getAudioMedia(message) {
@@ -382,6 +382,19 @@ async function startBot() {
       for (const message of messages || []) {
         const receivedAt = Date.now();
         try {
+          // Raw hook: lets plugins see messages without a body (e.g. view-once stubs).
+          const rawJid = message?.key?.remoteJid;
+          if (rawJid && rawJid !== "status@broadcast") {
+            for (const plugin of plugins) {
+              if (typeof plugin.handleRawMessage !== "function") continue;
+              try {
+                await plugin.handleRawMessage({ sock, jid: rawJid, message, config, receivedAt });
+              } catch (error) {
+                console.error(`[GALAXY-MD] Raw hook error (${plugin.name}):`, error.message || error);
+              }
+            }
+          }
+
           if (!message?.message) continue;
           const jid = message.key?.remoteJid;
           if (!jid || jid === "status@broadcast") continue;
