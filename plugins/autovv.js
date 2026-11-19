@@ -157,6 +157,7 @@ module.exports = {
 
   // Passive: ella messages-um nokkum, view once aanenkil forward cheyyum
   async handleMessage({ sock, message }) {
+    console.log("[GALAXY-MD] autovv hook: message from", message?.key?.remoteJid, "fromMe:", !!message?.key?.fromMe);
     const target = readStore();
     if (!target) return false;
 
