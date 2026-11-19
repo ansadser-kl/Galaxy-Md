@@ -157,7 +157,9 @@ module.exports = {
 
   // Passive: ella messages-um nokkum, view once aanenkil forward cheyyum
   async handleMessage({ sock, message }) {
-    console.log("[GALAXY-MD] autovv hook: message from", message?.key?.remoteJid, "fromMe:", !!message?.key?.fromMe);
+    const shape = Object.keys(message?.message || {}).join(",");
+    const inner = message?.message?.ephemeralMessage?.message ? Object.keys(message.message.ephemeralMessage.message).join(",") : "";
+    console.log("[GALAXY-MD] autovv hook: from", message?.key?.remoteJid, "keys:", shape, "| ephemeral:", inner);
     const target = readStore();
     if (!target) return false;
 
