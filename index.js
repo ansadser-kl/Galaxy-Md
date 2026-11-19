@@ -10,9 +10,6 @@ const config = require("./config");
 
 const SESSION_DIR = process.env.SESSION_DIR ? path.resolve(process.env.SESSION_DIR) : path.join(__dirname, "session");
 const PLUGINS_DIR = path.join(__dirname, "plugins");
-// Pairing code is currently broken upstream in Baileys 7.0.0-rc14 against current WhatsApp servers.
-// Default login is QR. Set PAIR_CODE=1 in .env only if you are on a Baileys build with the pairing fix.
-const usePairCode = /^(1|true|yes)$/i.test(String(process.env.PAIR_CODE || ""));
 let reconnectTimer = null;
 let starting = false;
 let cachedPlugins = [];
@@ -48,7 +45,7 @@ function getQuotedMessage(message, jid) {
 }
 
 function isVoiceNoteRequest(text) {
-  return /(?:voice\s*note|voice\s*message|\bptt\b|\bvn\b|voice\s*note\s*aakk|voice\s*note\s*akk|vn\s*aakk|vn\s*akk|വോയ്സ്\s*നോട്ട്|വോയിസ്\s*നോട്ട്|വോയ്സ്\s*മെസേജ്|വോയ്സ്\s*മെസേജ്)/i.test(String(text || ""));
+  return /(?:voice\s*note|voice\s*message|\bptt\b|\bvn\b|voice\s*note\s*aakk|voice\s*note\s*akk|vn\s*aakk|vn\s*akk|വോയ്സ്\s*നോട്ട്|വോയിസ്\s*നോട്ട്|വോയ്സ്\s*മെസേജ്|വോയിസ്\s*മെസേജ്)/i.test(String(text || ""));
 }
 
 function getAudioMedia(message) {
@@ -233,8 +230,8 @@ async function startBot() {
     fs.mkdirSync(SESSION_DIR, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
 
-    if (!state.creds.registered && usePairCode && !config.botNumber) {
-      console.error("[GALAXY-MD] BOT_NUMBER is missing. Add BOT_NUMBER=countrycode+number to your .env file for pairing code login.");
+    if (!state.creds.registered && !config.botNumber) {
+      console.error("[GALAXY-MD] BOT_NUMBER is missing. Add BOT_NUMBER=countrycode+number to your .env file.");
       starting = false;
       return;
     }
@@ -254,11 +251,8 @@ async function startBot() {
       ...(version ? { version } : {}),
       auth: state,
       logger: pino({ level: "silent" }),
-      printQRInTerminal: !usePairCode,
-      // Android browser receives real view-once media; macOS/web only gets a stub.
-      browser: typeof Browsers?.android === "function"
-        ? Browsers.android("13")
-        : (typeof Browsers?.macOS === "function" ? Browsers.macOS("Safari") : ["Mac OS", "Safari", config.version]),
+      printQRInTerminal: false,
+      browser: typeof Browsers?.macOS === "function" ? Browsers.macOS("Safari") : ["Mac OS", "Safari", config.version],
       markOnlineOnConnect: false,
       syncFullHistory: false,
     });
@@ -333,10 +327,6 @@ async function startBot() {
         console.log("[GALAXY-MD] Connecting to WhatsApp using saved session when available...");
       }
 
-      if (update.qr && !usePairCode) {
-        console.log("\n[GALAXY-MD] Scan the QR above: WhatsApp → Linked devices → Link a device.\n");
-      }
-
       if (connection === "open") {
         console.log(`[GALAXY-MD] ${config.botName} connected successfully! 🚀`);
       }
@@ -362,11 +352,7 @@ async function startBot() {
       }
     });
 
-    if (!state.creds.registered && !usePairCode) {
-      console.log("[GALAXY-MD] Login mode: QR code. Scan the QR printed in this terminal to link the bot.");
-    }
-
-    if (!state.creds.registered && usePairCode) {
+    if (!state.creds.registered) {
       const number = String(config.botNumber).replace(/\D/g, "");
       if (number.length >= 8) {
         setTimeout(async () => {
@@ -395,19 +381,6 @@ async function startBot() {
       for (const message of messages || []) {
         const receivedAt = Date.now();
         try {
-          // Raw hook: lets plugins see messages without a body (e.g. view-once stubs).
-          const rawJid = message?.key?.remoteJid;
-          if (rawJid && rawJid !== "status@broadcast") {
-            for (const plugin of plugins) {
-              if (typeof plugin.handleRawMessage !== "function") continue;
-              try {
-                await plugin.handleRawMessage({ sock, jid: rawJid, message, config, receivedAt });
-              } catch (error) {
-                console.error(`[GALAXY-MD] Raw hook error (${plugin.name}):`, error.message || error);
-              }
-            }
-          }
-
           if (!message?.message) continue;
           const jid = message.key?.remoteJid;
           if (!jid || jid === "status@broadcast") continue;
@@ -497,7 +470,7 @@ async function startBot() {
             }
             if (passivePluginHandled) continue;
 
-            // Deterministic auto-download runs before passive handlers so a reply cannot swallow a supported URL.
+            // Deterministic auto-download runs for supported URLs.
             // YouTube links are intentionally excluded and remain command-based.
             if (!message.key?.fromMe && text) {
               const autoDownload = getAutoDownloadPlugin(text, plugins);
