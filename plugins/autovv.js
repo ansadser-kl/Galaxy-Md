@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { downloadMediaMessage } = require("baileys");
 
 const DATA_FILE = path.join(__dirname, "..", "galaxy-data.json");
 const seen = new Set();
@@ -19,7 +20,48 @@ function writeData(patch) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-function getOwnJid(sock, config) {
+function unwrapViewOnce(msgContent) {
+  if (!msgContent || typeof msgContent !== "object") return null;
+
+  let current = msgContent;
+  while (
+    current.ephemeralMessage?.message ||
+    current.viewOnceMessage?.message ||
+    current.viewOnceMessageV2?.message ||
+    current.viewOnceMessageV2Extension?.message ||
+    current.documentWithCaptionMessage?.message
+  ) {
+    current =
+      current.ephemeralMessage?.message ||
+      current.viewOnceMessage?.message ||
+      current.viewOnceMessageV2?.message ||
+      current.viewOnceMessageV2Extension?.message ||
+      current.documentWithCaptionMessage?.message;
+  }
+
+  // Check if original message was wrapped as viewOnce OR has viewOnce flag
+  const wasWrapped = Boolean(
+    msgContent.viewOnceMessage ||
+    msgContent.viewOnceMessageV2 ||
+    msgContent.viewOnceMessageV2Extension ||
+    msgContent.ephemeralMessage?.message?.viewOnceMessage ||
+    msgContent.ephemeralMessage?.message?.viewOnceMessageV2 ||
+    msgContent.ephemeralMessage?.message?.viewOnceMessageV2Extension
+  );
+
+  for (const type of ["imageMessage", "videoMessage", "audioMessage"]) {
+    const media = current[type];
+    if (media && (wasWrapped || media.viewOnce)) {
+      return { type, media, cleanMessage: { [type]: media } };
+    }
+  }
+
+  return null;
+}
+
+function getTargetJid(data, sock, config) {
+  if (data.autovvTarget) return data.autovvTarget;
+  if (sock?.user?.lid) return sock.user.lid;
   const rawId = sock?.user?.id || "";
   if (rawId) {
     const num = rawId.split(":")[0].split("@")[0].replace(/\D/g, "");
@@ -29,51 +71,30 @@ function getOwnJid(sock, config) {
   return ownerNum ? `${ownerNum}@s.whatsapp.net` : "";
 }
 
-function extractViewOnce(msgContent) {
-  if (!msgContent || typeof msgContent !== "object") return null;
-
-  let inner = msgContent;
-  if (inner.ephemeralMessage?.message) inner = inner.ephemeralMessage.message;
-
-  const voWrapper =
-    inner.viewOnceMessage?.message ||
-    inner.viewOnceMessageV2?.message ||
-    inner.viewOnceMessageV2Extension?.message;
-
-  if (voWrapper) {
-    for (const type of ["imageMessage", "videoMessage", "audioMessage"]) {
-      if (voWrapper[type]) {
-        return { type, media: voWrapper[type], container: voWrapper };
-      }
-    }
-  }
-
-  for (const type of ["imageMessage", "videoMessage", "audioMessage"]) {
-    if (inner[type]?.viewOnce) {
-      return { type, media: inner[type], container: inner };
-    }
-  }
-
-  return null;
-}
-
 module.exports = {
   name: "autovv",
   aliases: ["avv"],
   description: "Auto save View Once media to your own chat (.autovv on / off / status)",
   category: "Owner",
 
-  async execute({ sock, jid, message, args, isPrivileged }) {
+  async execute({ sock, jid, message, args, isPrivileged, config }) {
     const arg = String(args?.[0] || "").toLowerCase().trim();
     const reply = (text) => sock.sendMessage(jid, { text }, { quoted: message });
 
     if (arg === "on" || arg === "off") {
       if (!isPrivileged) return reply("❌ Owner mathram use cheyyam.");
       const enabled = arg === "on";
-      writeData({ autovv: enabled });
+      const patch = { autovv: enabled };
+      // Save the chat JID where .autovv on was triggered (if DM/self-chat), else fallback to own JID
+      if (enabled) {
+        patch.autovvTarget = !jid.endsWith("@g.us")
+          ? jid
+          : getTargetJid(readData(), sock, config);
+      }
+      writeData(patch);
       return reply(
         enabled
-          ? "✅ *Auto View Once ON*\nIni groups-ilum personal chats-ilum varunna ella View Once files-um swantham chat-ilekk varum."
+          ? "✅ *Auto View Once ON*\nIni groups-ilum personal chats-ilum varunna ella View Once files-um ee chat-ilekk varum."
           : "⛔ *Auto View Once OFF*"
       );
     }
@@ -88,12 +109,13 @@ module.exports = {
   },
 
   async handleReply({ sock, jid, message, config }) {
-    if (readData().autovv !== true) return false;
+    const data = readData();
+    if (data.autovv !== true) return false;
 
     const key = message?.key || {};
     if (key.fromMe) return false;
 
-    const vo = extractViewOnce(message?.message);
+    const vo = unwrapViewOnce(message?.message);
     if (!vo) return false;
 
     if (key.id) {
@@ -102,27 +124,16 @@ module.exports = {
       if (seen.size > 300) seen.delete(seen.values().next().value);
     }
 
-    const selfJid = getOwnJid(sock, config);
-    if (!selfJid) return false;
+    const targetJid = getTargetJid(data, sock, config);
+    if (!targetJid) return false;
 
     try {
-      const baileys = await import("baileys");
-      const downloadMediaMessage = baileys.downloadMediaMessage;
-
-      const fakeMsg = {
+      const source = {
         key: message.key,
-        message: vo.container,
+        message: vo.cleanMessage,
       };
 
-      const buffer = await downloadMediaMessage(
-        fakeMsg,
-        "buffer",
-        {},
-        {
-          reuploadRequest: sock.updateMediaMessage,
-        }
-      );
-
+      const buffer = await downloadMediaMessage(source, "buffer", {});
       if (!buffer || !buffer.length) return false;
 
       const isGroup = jid.endsWith("@g.us");
@@ -152,25 +163,25 @@ module.exports = {
       const mentions = senderJid && senderJid.includes("@") ? [senderJid] : [];
 
       if (vo.type === "imageMessage") {
-        await sock.sendMessage(selfJid, {
+        await sock.sendMessage(targetJid, {
           image: buffer,
           caption: infoCaption,
           mentions,
         });
       } else if (vo.type === "videoMessage") {
-        await sock.sendMessage(selfJid, {
+        await sock.sendMessage(targetJid, {
           video: buffer,
           mimetype: vo.media?.mimetype || "video/mp4",
           caption: infoCaption,
           mentions,
         });
       } else if (vo.type === "audioMessage") {
-        await sock.sendMessage(selfJid, {
+        await sock.sendMessage(targetJid, {
           audio: buffer,
           mimetype: vo.media?.mimetype || "audio/ogg; codecs=opus",
           ptt: Boolean(vo.media?.ptt),
         });
-        await sock.sendMessage(selfJid, { text: infoCaption, mentions });
+        await sock.sendMessage(targetJid, { text: infoCaption, mentions });
       }
     } catch (error) {
       console.error("[GALAXY-MD] autovv failed:", error?.message || error);
