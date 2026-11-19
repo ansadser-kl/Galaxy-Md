@@ -22,7 +22,6 @@ const MEDIA_KEYS = [
   "stickerMessage",
 ];
 
-// Prevents the same view-once message from being forwarded twice on duplicate Baileys events.
 const processed = new Set();
 const inFlight = new Set();
 
@@ -48,30 +47,38 @@ function unwrapMessage(message) {
   return current;
 }
 
-function hasViewOnceWrapper(message) {
-  let current = message || {};
+// Baileys often receives only a stub with key.isViewOnce = true and no message body.
+function isViewOnceSignal(message) {
+  const key = message?.key || {};
+  if (key.isViewOnce === true) return true;
+
+  const params = (Array.isArray(message?.messageStubParameters) ? message.messageStubParameters : [])
+    .map((value) => String(value || ""));
+  if (params.some((value) => /view.?once|view_once/i.test(value))) return true;
+
+  const raw = message?.message;
+  if (!raw) return false;
+  let current = raw;
   for (let i = 0; i < 8; i++) {
     if (current?.viewOnceMessage || current?.viewOnceMessageV2 || current?.viewOnceMessageV2Extension) {
-      return true;
+      const inner = unwrapMessage(raw);
+      if (MEDIA_KEYS.some((mediaKey) => inner?.[mediaKey]?.viewOnce === true)) return true;
     }
-    const next = WRAPPERS.map((key) => current?.[key]?.message).find(Boolean);
+    const next = WRAPPERS.map((item) => current?.[item]?.message).find(Boolean);
     if (!next) break;
     current = next;
   }
-  return false;
+  return MEDIA_KEYS.some((mediaKey) => raw?.[mediaKey]?.viewOnce === true);
 }
 
-function getViewOnceMedia(message) {
+function getViewOnceMedia(message, flagged) {
   const raw = message?.message;
   if (!raw) return null;
-
-  const wrapped = hasViewOnceWrapper(raw);
   const msg = unwrapMessage(raw);
   for (const mediaType of MEDIA_KEYS) {
     const media = msg?.[mediaType];
     if (!media) continue;
-    // Some Baileys builds keep the wrapper; others only set viewOnce on the media.
-    if (wrapped || media.viewOnce === true) return { mediaType, media };
+    if (flagged || media.viewOnce === true) return { mediaType, media };
   }
   return null;
 }
@@ -86,7 +93,7 @@ function getSender(message) {
   return message?.key?.participant || message?.key?.participantAlt || message?.key?.remoteJid || "";
 }
 
-async function buildCaption({ sock, jid, message }) {
+async function buildCaption({ sock, jid, message, unavailable }) {
   const sender = getSender(message);
   const number = digits(sender);
   const name = String(message?.pushName || message?.senderName || "").replace(/[\r\n]+/g, " ").trim().slice(0, 60);
@@ -97,12 +104,21 @@ async function buildCaption({ sock, jid, message }) {
     chat = String(metadata?.subject || jid).replace(/[\r\n]+/g, " ").slice(0, 80);
   }
 
-  return [
-    "🔒 *View Once Auto-Save*",
-    "👤 From: " + (number ? "@" + number : "Unknown") + (name ? " (" + name + ")" : ""),
-    "💬 Chat: " + chat,
-    "🕒 " + new Date().toLocaleString(),
-  ].join("\n");
+  const lines = unavailable
+    ? [
+        "🔒 *View Once Alert*",
+        "👤 From: " + (number ? "@" + number : "Unknown") + (name ? " (" + name + ")" : ""),
+        "💬 Chat: " + chat,
+        "⚠️ Media not delivered to this Baileys/linked device (stub only).",
+      ]
+    : [
+        "🔒 *View Once Auto-Save*",
+        "👤 From: " + (number ? "@" + number : "Unknown") + (name ? " (" + name + ")" : ""),
+        "💬 Chat: " + chat,
+      ];
+
+  lines.push("🕒 " + new Date().toLocaleString());
+  return lines.join("\n");
 }
 
 function buildPayload({ mediaType, media }, caption) {
@@ -131,13 +147,79 @@ function buildPayload({ mediaType, media }, caption) {
   }
 }
 
+async function handle({ sock, jid, message, config }) {
+  if (!jid || jid === "status@broadcast") return false;
+  if (!isViewOnceSignal(message)) return false;
+
+  const data = readData();
+  if (data.autovv === false) return false;
+
+  const target = getTargetJid(data, config);
+  if (!target) {
+    console.warn("[GALAXY-MD] autovv: no owner/bot number configured as target.");
+    return false;
+  }
+
+  const id = message?.key?.id;
+  if (id && (processed.has(id) || inFlight.has(id))) return true;
+  const key = id || Math.random().toString(36).slice(2);
+  inFlight.add(key);
+
+  try {
+    const found = getViewOnceMedia(message, message?.key?.isViewOnce === true);
+    const caption = await buildCaption({ sock, jid, message, unavailable: !found });
+    const sender = getSender(message);
+    const opts = sender && !sender.endsWith("@g.us") ? { mentions: [sender] } : {};
+
+    if (!found) {
+      await sock.sendMessage(target, { text: caption }, opts);
+      processed.add(key);
+      if (processed.size > 300) processed.delete(processed.values().next().value);
+      console.log("[GALAXY-MD] autovv: view-once stub detected; media unavailable in this Baileys build.");
+      return true;
+    }
+
+    const baileys = await import("baileys");
+    if (typeof baileys.downloadMediaMessage !== "function") {
+      throw new Error("Baileys downloadMediaMessage export is unavailable");
+    }
+
+    const buffer = await baileys.downloadMediaMessage(message, "buffer", {}, {
+      logger: pino({ level: "silent" }),
+      reuploadRequest: sock.updateMediaMessage,
+    });
+
+    if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+      throw new Error("View-once media download returned an empty file");
+    }
+
+    const payload = buildPayload({ ...found, media: { ...found.media, __buffer: buffer } }, caption);
+    if (!payload) return false;
+
+    await sock.sendMessage(target, payload, opts);
+    processed.add(key);
+    if (processed.size > 300) processed.delete(processed.values().next().value);
+    console.log("[GALAXY-MD] autovv: view-once media forwarded to " + target);
+    return true;
+  } catch (error) {
+    console.error("[GALAXY-MD] autovv failed:", error?.stack || error);
+    try {
+      const caption = await buildCaption({ sock, jid, message, unavailable: true });
+      await sock.sendMessage(target, { text: caption + "\n❌ " + String(error?.message || error).slice(0, 160) });
+    } catch {}
+    processed.add(key);
+    return true;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
 module.exports = {
   name: "autovv",
   aliases: ["vv", "autoviewonce"],
-  description: "Auto-forward view-once media from groups/DMs to the owner",
+  description: "Auto-forward view-once media/stubs from groups/DMs to the owner",
   category: "Automation",
 
-  // .autovv on | off | status | target <number>
   async execute({ sock, jid, message, args, query, isPrivileged, config }) {
     const reply = (text) => sock.sendMessage(jid, { text }, { quoted: message });
     const input = String(query || (Array.isArray(args) ? args.join(" ") : "") || "").trim();
@@ -179,62 +261,13 @@ module.exports = {
     );
   },
 
-  // Passive hook: runs for every normal (non-command) message, including view-once media.
-  async handleMessage({ sock, jid, message, config }) {
-    if (!jid || jid === "status@broadcast") return false;
-    if (message?.key?.fromMe) return false;
+  // Raw hook (called by patched index.js even when a message has no body).
+  async handleRawMessage(ctx) {
+    return handle(ctx);
+  },
 
-    const found = getViewOnceMedia(message);
-    if (!found) return false;
-
-    const data = readData();
-    if (data.autovv === false) return false;
-
-    const target = getTargetJid(data, config);
-    if (!target) {
-      console.warn("[GALAXY-MD] autovv: no owner/bot number configured as target.");
-      return false;
-    }
-
-    const id = message?.key?.id;
-    if (id && processed.has(id)) return true;
-
-    const key = id || Math.random().toString(36).slice(2);
-    inFlight.add(key);
-
-    try {
-      const baileys = await import("baileys");
-      if (typeof baileys.downloadMediaMessage !== "function") {
-        throw new Error("Baileys downloadMediaMessage export is unavailable");
-      }
-
-      const buffer = await baileys.downloadMediaMessage(message, "buffer", {}, {
-        logger: pino({ level: "silent" }),
-        reuploadRequest: sock.updateMediaMessage,
-      });
-
-      if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
-        throw new Error("View-once media download returned an empty file");
-      }
-
-      const caption = await buildCaption({ sock, jid, message });
-      const payload = buildPayload({ ...found, media: { ...found.media, __buffer: buffer } }, caption);
-      if (!payload) return false;
-
-      const sender = getSender(message);
-      await sock.sendMessage(target, payload, sender && !sender.endsWith("@g.us")
-        ? { mentions: [sender] }
-        : {});
-
-      processed.add(key);
-      if (processed.size > 300) processed.delete(processed.values().next().value);
-      console.log("[GALAXY-MD] autovv: view-once media forwarded to " + target);
-      return true;
-    } catch (error) {
-      console.error("[GALAXY-MD] autovv failed:", error?.stack || error);
-      return true;
-    } finally {
-      inFlight.delete(key);
-    }
+  // Normal passive hook (kept for compatibility).
+  async handleMessage(ctx) {
+    return handle(ctx);
   },
 };
