@@ -2,7 +2,6 @@
 
 const fs = require("fs");
 const path = require("path");
-const { downloadMediaMessage, getContentType } = require("@whiskeysockets/baileys");
 
 const DATA_FILE = path.join(__dirname, "..", "galaxy-data.json");
 const seen = new Set();
@@ -26,14 +25,13 @@ function getOwnJid(sock, config) {
     const num = rawId.split(":")[0].split("@")[0].replace(/\D/g, "");
     if (num) return `${num}@s.whatsapp.net`;
   }
-  const ownerNum = String(config?.ownerNumber || "").replace(/\D/g, "");
+  const ownerNum = String(config?.ownerNumber || config?.botNumber || "").replace(/\D/g, "");
   return ownerNum ? `${ownerNum}@s.whatsapp.net` : "";
 }
 
 function extractViewOnce(msgContent) {
   if (!msgContent || typeof msgContent !== "object") return null;
 
-  // Unwrap ephemeral / viewOnce wrappers
   let inner = msgContent;
   if (inner.ephemeralMessage?.message) inner = inner.ephemeralMessage.message;
 
@@ -43,13 +41,13 @@ function extractViewOnce(msgContent) {
     inner.viewOnceMessageV2Extension?.message;
 
   if (voWrapper) {
-    const type = getContentType(voWrapper);
-    if (type && voWrapper[type]) {
-      return { type, media: voWrapper[type], container: voWrapper };
+    for (const type of ["imageMessage", "videoMessage", "audioMessage"]) {
+      if (voWrapper[type]) {
+        return { type, media: voWrapper[type], container: voWrapper };
+      }
     }
   }
 
-  // Direct media with viewOnce: true flag (newer WhatsApp builds)
   for (const type of ["imageMessage", "videoMessage", "audioMessage"]) {
     if (inner[type]?.viewOnce) {
       return { type, media: inner[type], container: inner };
@@ -98,7 +96,6 @@ module.exports = {
     const vo = extractViewOnce(message?.message);
     if (!vo) return false;
 
-    // Prevent duplicate processing
     if (key.id) {
       if (seen.has(key.id)) return false;
       seen.add(key.id);
@@ -109,6 +106,9 @@ module.exports = {
     if (!selfJid) return false;
 
     try {
+      const baileys = await import("baileys");
+      const downloadMediaMessage = baileys.downloadMediaMessage;
+
       const fakeMsg = {
         key: message.key,
         message: vo.container,
@@ -119,7 +119,6 @@ module.exports = {
         "buffer",
         {},
         {
-          logger: console,
           reuploadRequest: sock.updateMediaMessage,
         }
       );
@@ -131,7 +130,7 @@ module.exports = {
       const senderNum = senderJid ? senderJid.split("@")[0].split(":")[0] : "Unknown";
       const pushName = String(message?.pushName || "").replace(/[\r\n]+/g, " ").trim();
 
-      let chatLabel = `💬 *Chat:* @${senderNum}`;
+      let chatLabel = `💬 *Chat:* @${senderNum}${pushName ? ` (${pushName})` : ""}`;
       if (isGroup) {
         let groupName = jid;
         try {
@@ -177,7 +176,6 @@ module.exports = {
       console.error("[GALAXY-MD] autovv failed:", error?.message || error);
     }
 
-    // Return false so other listeners (if any) are not blocked
     return false;
   },
 };
