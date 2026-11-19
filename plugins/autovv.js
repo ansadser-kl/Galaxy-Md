@@ -2,184 +2,182 @@
 
 const fs = require("fs");
 const path = require("path");
-const config = require("../config");
+const { downloadMediaMessage, getContentType } = require("@whiskeysockets/baileys");
 
-// Target chat save cheyyunna file (bot restart kazhinjum undaakum)
-const DATA_DIR = path.join(__dirname, "..", "data");
-const STORE = path.join(DATA_DIR, "autovv.json");
-const RECENT_MAX = 2000;
+const DATA_FILE = path.join(__dirname, "..", "galaxy-data.json");
+const seen = new Set();
 
-const recent = new Set();
-
-const digits = (v) => String(v || "").split("@")[0].split(":")[0].replace(/\D/g, "");
-
-// Target: file-il ulla value; file illenkil owner-inte private chat (default ON)
-// "off" aanenkil nirthum
-function readStore() {
+function readData() {
   try {
-    const saved = JSON.parse(fs.readFileSync(STORE, "utf8")).target;
-    if (saved === "off") return "";
-    if (saved) return saved;
-  } catch {}
-  const owner = digits(config.ownerNumber);
-  return owner ? owner + "@s.whatsapp.net" : "";
-}
-
-function writeStore(target) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(STORE, JSON.stringify({ target }, null, 2));
-}
-
-function firstTime(key) {
-  if (recent.has(key)) return false;
-  recent.add(key);
-  if (recent.size > RECENT_MAX) recent.delete(recent.values().next().value);
-  return true;
-}
-
-function unwrap(m) {
-  let cur = m || {};
-  for (let i = 0; i < 6; i++) {
-    const next =
-      cur.ephemeralMessage?.message ||
-      cur.documentWithCaptionMessage?.message;
-    if (!next) break;
-    cur = next;
+    return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+  } catch {
+    return {};
   }
-  return cur;
 }
 
-// View once message-il ninnu inner media edukkum
-function extractViewOnce(message) {
-  const m = unwrap(message);
-  const wrapper = m.viewOnceMessage || m.viewOnceMessageV2 || m.viewOnceMessageV2Extension;
-  if (!wrapper?.message) return null;
-  const inner = unwrap(wrapper.message);
-  const type = ["imageMessage", "videoMessage", "audioMessage"].find((t) => inner[t]);
-  if (!type) return null;
-  return { type, message: inner };
+function writeData(patch) {
+  const data = { ...readData(), ...patch };
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-function loadDownloader() {
-  for (const name of ["baileys", "@whiskeysockets/baileys"]) {
-    try {
-      const mod = require(name);
-      if (typeof mod.downloadMediaMessage === "function") return mod.downloadMediaMessage;
-    } catch {}
+function getOwnJid(sock, config) {
+  const rawId = sock?.user?.id || "";
+  if (rawId) {
+    const num = rawId.split(":")[0].split("@")[0].replace(/\D/g, "");
+    if (num) return `${num}@s.whatsapp.net`;
   }
-  throw new Error("Baileys downloadMediaMessage not found.");
+  const ownerNum = String(config?.ownerNumber || "").replace(/\D/g, "");
+  return ownerNum ? `${ownerNum}@s.whatsapp.net` : "";
 }
 
-function normalizeJid(input, current) {
-  const value = String(input || "").trim().toLowerCase();
-  if (!value) return null;
-  if (value === "here") return current;
-  if (value.includes("@")) {
-    return /^[\w.-]+@(s\.whatsapp\.net|g\.us|lid)$/.test(value) ? value : null;
+function extractViewOnce(msgContent) {
+  if (!msgContent || typeof msgContent !== "object") return null;
+
+  // Unwrap ephemeral / viewOnce wrappers
+  let inner = msgContent;
+  if (inner.ephemeralMessage?.message) inner = inner.ephemeralMessage.message;
+
+  const voWrapper =
+    inner.viewOnceMessage?.message ||
+    inner.viewOnceMessageV2?.message ||
+    inner.viewOnceMessageV2Extension?.message;
+
+  if (voWrapper) {
+    const type = getContentType(voWrapper);
+    if (type && voWrapper[type]) {
+      return { type, media: voWrapper[type], container: voWrapper };
+    }
   }
-  const d = value.replace(/\D/g, "");
-  return d.length >= 7 ? d + "@s.whatsapp.net" : null;
-}
 
-function isOwner(message) {
-  if (message?.key?.fromMe) return true;
-  const owner = digits(config.ownerNumber);
-  const sender = digits(message?.key?.participant || message?.key?.participantAlt || message?.key?.remoteJid);
-  return !!owner && owner === sender;
-}
-
-async function forward(sock, target, message, vv) {
-  const sourceChat = message.key.remoteJid;
-  const sender = message.key.participant || message.key.participantAlt || sourceChat;
-  const senderNum = digits(sender);
-  const info =
-    `*Auto view once*\nFrom: @${senderNum}\nChat: ${sourceChat.endsWith("@g.us") ? "group " : ""}${digits(sourceChat)}`;
-
-  const downloadMediaMessage = loadDownloader();
-  const buffer = await downloadMediaMessage({ key: message.key, message: vv.message }, "buffer", {});
-  if (!buffer?.length) throw new Error("view once media download failed");
-
-  const node = vv.message[vv.type];
-  const original = node?.caption ? node.caption + "\n\n" : "";
-  const mentions = [sender];
-
-  if (vv.type === "imageMessage") {
-    await sock.sendMessage(target, { image: buffer, caption: original + info, mentions });
-  } else if (vv.type === "videoMessage") {
-    await sock.sendMessage(target, { video: buffer, caption: original + info, mimetype: node.mimetype || "video/mp4", mentions });
-  } else {
-    await sock.sendMessage(target, { text: info, mentions });
-    await sock.sendMessage(target, { audio: buffer, mimetype: node.mimetype || "audio/ogg; codecs=opus", ptt: !!node.ptt });
+  // Direct media with viewOnce: true flag (newer WhatsApp builds)
+  for (const type of ["imageMessage", "videoMessage", "audioMessage"]) {
+    if (inner[type]?.viewOnce) {
+      return { type, media: inner[type], container: inner };
+    }
   }
+
+  return null;
 }
 
 module.exports = {
   name: "autovv",
-  aliases: [],
-  description: "Auto anti view-once: view once media-kal auto-aayi choose cheytha chat-ilekku forward cheyyum",
+  aliases: ["avv"],
+  description: "Auto save View Once media to your own chat (.autovv on / off / status)",
   category: "Owner",
 
-  // Command: .autovv here | <number/jid> | off | status
-  async execute({ sock, jid, message, text, args }) {
-    const send = (t) => sock.sendMessage(jid, { text: t }, { quoted: message });
-    if (!isOwner(message)) return send("❌ Owner only.");
+  async execute({ sock, jid, message, args, isPrivileged }) {
+    const arg = String(args?.[0] || "").toLowerCase().trim();
+    const reply = (text) => sock.sendMessage(jid, { text }, { quoted: message });
 
-    const input = String(text || args?.join(" ") || "").trim();
-    const arg = input.split(/\s+/).slice(1).join(" ").trim();
-    const current = readStore();
-
-    if (!arg || arg.toLowerCase() === "status") {
-      const on = !!current;
-      return send(
-        `*Auto view once*\nStatus: ${on ? "ON ✅" : "OFF ❌"}` +
-        (on ? `\nTarget: ${current}` : "") + "\n\n" +
-        "Commands:\n.autovv on - on aakkum (ninte number-ilekku)\n.autovv off - off aakkum\n.autovv status - ippo state\n.autovv here - ith chat-ilekku\n.autovv <number> - custom number-ilekku"
+    if (arg === "on" || arg === "off") {
+      if (!isPrivileged) return reply("❌ Owner mathram use cheyyam.");
+      const enabled = arg === "on";
+      writeData({ autovv: enabled });
+      return reply(
+        enabled
+          ? "✅ *Auto View Once ON*\nIni groups-ilum personal chats-ilum varunna ella View Once files-um swantham chat-ilekk varum."
+          : "⛔ *Auto View Once OFF*"
       );
     }
 
-    if (arg.toLowerCase() === "on") {
-      writeStore("");
-      return send("Auto view once ON ✅\nView once media ninte own number-ilekku varum.");
-    }
-
-    if (arg.toLowerCase() === "off") {
-      writeStore("off");
-      return send("Auto view once off ❌");
-    }
-
-    const target = normalizeJid(arg, jid);
-    if (!target) {
-      return send("Invalid chat! `here`, number, allenkil `123456789@s.whatsapp.net` / `...@g.us` use cheyyuka.");
-    }
-    writeStore(target);
-    return send("Auto view once on ✅\nView once media ivide varum: " + target);
+    const isOn = readData().autovv === true;
+    return reply(
+      `👁️ *Auto View Once Status:* ${isOn ? "ON ✅" : "OFF ⛔"}\n\n` +
+      `• *.autovv on* — Full chats & groups-il ON aakkan\n` +
+      `• *.autovv off* — Full chats & groups-il OFF aakkan\n` +
+      `• *.autovv status* — Current status ariyan`
+    );
   },
 
-  // Passive: ella messages-um nokkum, view once aanenkil forward cheyyum
-  async handleMessage({ sock, message }) {
-    const shape = Object.keys(message?.message || {}).join(",");
-    const inner = message?.message?.ephemeralMessage?.message ? Object.keys(message.message.ephemeralMessage.message).join(",") : "";
-    console.log("[GALAXY-MD] autovv hook: from", message?.key?.remoteJid, "keys:", shape, "| ephemeral:", inner);
-    const target = readStore();
-    if (!target) return false;
+  async handleReply({ sock, jid, message, config }) {
+    if (readData().autovv !== true) return false;
 
-    const key = message?.key;
-    if (!key?.id || key.fromMe) return false;
+    const key = message?.key || {};
+    if (key.fromMe) return false;
 
-    const vv = extractViewOnce(message.message);
-    if (!vv) return false;
-    console.log("[GALAXY-MD] autovv: view once detected from", key.remoteJid, "-> target", target);
+    const vo = extractViewOnce(message?.message);
+    if (!vo) return false;
 
-    const dedup = key.remoteJid + ":" + key.id;
-    if (!firstTime(dedup)) return false;
+    // Prevent duplicate processing
+    if (key.id) {
+      if (seen.has(key.id)) return false;
+      seen.add(key.id);
+      if (seen.size > 300) seen.delete(seen.values().next().value);
+    }
+
+    const selfJid = getOwnJid(sock, config);
+    if (!selfJid) return false;
 
     try {
-      await forward(sock, target, message, vv);
+      const fakeMsg = {
+        key: message.key,
+        message: vo.container,
+      };
+
+      const buffer = await downloadMediaMessage(
+        fakeMsg,
+        "buffer",
+        {},
+        {
+          logger: console,
+          reuploadRequest: sock.updateMediaMessage,
+        }
+      );
+
+      if (!buffer || !buffer.length) return false;
+
+      const isGroup = jid.endsWith("@g.us");
+      const senderJid = isGroup ? (key.participant || key.participantAlt || "") : jid;
+      const senderNum = senderJid ? senderJid.split("@")[0].split(":")[0] : "Unknown";
+      const pushName = String(message?.pushName || "").replace(/[\r\n]+/g, " ").trim();
+
+      let chatLabel = `💬 *Chat:* @${senderNum}`;
+      if (isGroup) {
+        let groupName = jid;
+        try {
+          const meta = await sock.groupMetadata(jid);
+          if (meta?.subject) groupName = meta.subject;
+        } catch {}
+        chatLabel = `👥 *Group:* ${groupName}\n👤 *Sender:* @${senderNum}${pushName ? ` (${pushName})` : ""}`;
+      }
+
+      const originalCaption = String(vo.media?.caption || "").trim();
+      const infoCaption = [
+        `👁️ *Auto View Once Captured*`,
+        chatLabel,
+        originalCaption ? `📝 *Caption:* ${originalCaption}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      const mentions = senderJid && senderJid.includes("@") ? [senderJid] : [];
+
+      if (vo.type === "imageMessage") {
+        await sock.sendMessage(selfJid, {
+          image: buffer,
+          caption: infoCaption,
+          mentions,
+        });
+      } else if (vo.type === "videoMessage") {
+        await sock.sendMessage(selfJid, {
+          video: buffer,
+          mimetype: vo.media?.mimetype || "video/mp4",
+          caption: infoCaption,
+          mentions,
+        });
+      } else if (vo.type === "audioMessage") {
+        await sock.sendMessage(selfJid, {
+          audio: buffer,
+          mimetype: vo.media?.mimetype || "audio/ogg; codecs=opus",
+          ptt: Boolean(vo.media?.ptt),
+        });
+        await sock.sendMessage(selfJid, { text: infoCaption, mentions });
+      }
     } catch (error) {
-      recent.delete(dedup);
-      console.error("[GALAXY-MD] autovv forward failed:", error?.message || error);
+      console.error("[GALAXY-MD] autovv failed:", error?.message || error);
     }
-    // false return: matha plugins-um normal aayi work cheyyum
+
+    // Return false so other listeners (if any) are not blocked
     return false;
   },
 };
