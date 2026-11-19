@@ -20,55 +20,48 @@ function writeData(patch) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-function unwrapViewOnce(msgContent) {
-  if (!msgContent || typeof msgContent !== "object") return null;
+function extractRealViewOnce(rootMsg) {
+  if (!rootMsg || typeof rootMsg !== "object") return null;
 
-  let current = msgContent;
-  while (
-    current.ephemeralMessage?.message ||
-    current.viewOnceMessage?.message ||
-    current.viewOnceMessageV2?.message ||
-    current.viewOnceMessageV2Extension?.message ||
-    current.documentWithCaptionMessage?.message
-  ) {
-    current =
-      current.ephemeralMessage?.message ||
-      current.viewOnceMessage?.message ||
-      current.viewOnceMessageV2?.message ||
-      current.viewOnceMessageV2Extension?.message ||
-      current.documentWithCaptionMessage?.message;
+  let current = rootMsg;
+  let hasViewOnceWrapper = false;
+
+  // Unwrap all Baileys 7 / WhatsApp outer containers (without touching contextInfo.quotedMessage)
+  for (let i = 0; i < 10; i++) {
+    if (current.viewOnceMessage?.message) {
+      hasViewOnceWrapper = true;
+      current = current.viewOnceMessage.message;
+    } else if (current.viewOnceMessageV2?.message) {
+      hasViewOnceWrapper = true;
+      current = current.viewOnceMessageV2.message;
+    } else if (current.viewOnceMessageV2Extension?.message) {
+      hasViewOnceWrapper = true;
+      current = current.viewOnceMessageV2Extension.message;
+    } else if (current.ephemeralMessage?.message) {
+      current = current.ephemeralMessage.message;
+    } else if (current.documentWithCaptionMessage?.message) {
+      current = current.documentWithCaptionMessage.message;
+    } else if (current.deviceSentMessage?.message) {
+      current = current.deviceSentMessage.message;
+    } else if (current.editedMessage?.message) {
+      current = current.editedMessage.message;
+    } else {
+      break;
+    }
   }
 
-  // Check if original message was wrapped as viewOnce OR has viewOnce flag
-  const wasWrapped = Boolean(
-    msgContent.viewOnceMessage ||
-    msgContent.viewOnceMessageV2 ||
-    msgContent.viewOnceMessageV2Extension ||
-    msgContent.ephemeralMessage?.message?.viewOnceMessage ||
-    msgContent.ephemeralMessage?.message?.viewOnceMessageV2 ||
-    msgContent.ephemeralMessage?.message?.viewOnceMessageV2Extension
-  );
-
   for (const type of ["imageMessage", "videoMessage", "audioMessage"]) {
-    const media = current[type];
-    if (media && (wasWrapped || media.viewOnce)) {
-      return { type, media, cleanMessage: { [type]: media } };
+    const media = current?.[type];
+    if (media && (hasViewOnceWrapper || media.viewOnce === true)) {
+      return {
+        type,
+        media,
+        cleanMessage: { [type]: media },
+      };
     }
   }
 
   return null;
-}
-
-function getTargetJid(data, sock, config) {
-  if (data.autovvTarget) return data.autovvTarget;
-  if (sock?.user?.lid) return sock.user.lid;
-  const rawId = sock?.user?.id || "";
-  if (rawId) {
-    const num = rawId.split(":")[0].split("@")[0].replace(/\D/g, "");
-    if (num) return `${num}@s.whatsapp.net`;
-  }
-  const ownerNum = String(config?.ownerNumber || config?.botNumber || "").replace(/\D/g, "");
-  return ownerNum ? `${ownerNum}@s.whatsapp.net` : "";
 }
 
 module.exports = {
@@ -77,7 +70,7 @@ module.exports = {
   description: "Auto save View Once media to your own chat (.autovv on / off / status)",
   category: "Owner",
 
-  async execute({ sock, jid, message, args, isPrivileged, config }) {
+  async execute({ sock, jid, message, args, isPrivileged }) {
     const arg = String(args?.[0] || "").toLowerCase().trim();
     const reply = (text) => sock.sendMessage(jid, { text }, { quoted: message });
 
@@ -85,16 +78,13 @@ module.exports = {
       if (!isPrivileged) return reply("❌ Owner mathram use cheyyam.");
       const enabled = arg === "on";
       const patch = { autovv: enabled };
-      // Save the chat JID where .autovv on was triggered (if DM/self-chat), else fallback to own JID
       if (enabled) {
-        patch.autovvTarget = !jid.endsWith("@g.us")
-          ? jid
-          : getTargetJid(readData(), sock, config);
+        patch.autovvTarget = jid;
       }
       writeData(patch);
       return reply(
         enabled
-          ? "✅ *Auto View Once ON*\nIni groups-ilum personal chats-ilum varunna ella View Once files-um ee chat-ilekk varum."
+          ? "✅ *Auto View Once ON*\nIni groups-ilum personal chats-ilum varunna ella View Once files-um direct ee chat-ilekk varum."
           : "⛔ *Auto View Once OFF*"
       );
     }
@@ -108,14 +98,14 @@ module.exports = {
     );
   },
 
-  async handleReply({ sock, jid, message, config }) {
+  async handleReply({ sock, jid, message }) {
     const data = readData();
     if (data.autovv !== true) return false;
 
     const key = message?.key || {};
     if (key.fromMe) return false;
 
-    const vo = unwrapViewOnce(message?.message);
+    const vo = extractRealViewOnce(message?.message);
     if (!vo) return false;
 
     if (key.id) {
@@ -124,7 +114,7 @@ module.exports = {
       if (seen.size > 300) seen.delete(seen.values().next().value);
     }
 
-    const targetJid = getTargetJid(data, sock, config);
+    const targetJid = data.autovvTarget;
     if (!targetJid) return false;
 
     try {
