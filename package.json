@@ -1,7 +1,7 @@
 {
   "name": "galaxy-md",
   "version": "2.0.0",
-  "description": "GALAXY-MD V2.0 - AI agent for WhatsApp, Termux, VPS, and PC",
+  "description": "GALAXY-MD V2.0 - WhatsApp bot for Termux, VPS, and PC",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -14,7 +14,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "baileys": "7.0.0-rc14",
+    "baileys": "github:Cosm1cBug/Baileys-X#master",
     "dotenv": "^16.4.7",
     "pg": "^8.16.3",
     "pino": "^9.6.0"
