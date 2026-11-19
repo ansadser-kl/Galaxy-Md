@@ -10,6 +10,9 @@ const config = require("./config");
 
 const SESSION_DIR = process.env.SESSION_DIR ? path.resolve(process.env.SESSION_DIR) : path.join(__dirname, "session");
 const PLUGINS_DIR = path.join(__dirname, "plugins");
+// Pairing code is currently broken upstream in Baileys 7.0.0-rc14 against current WhatsApp servers.
+// Default login is QR. Set PAIR_CODE=1 in .env only if you are on a Baileys build with the pairing fix.
+const usePairCode = /^(1|true|yes)$/i.test(String(process.env.PAIR_CODE || ""));
 let reconnectTimer = null;
 let starting = false;
 let cachedPlugins = [];
@@ -230,8 +233,8 @@ async function startBot() {
     fs.mkdirSync(SESSION_DIR, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
 
-    if (!state.creds.registered && !config.botNumber) {
-      console.error("[GALAXY-MD] BOT_NUMBER is missing. Add BOT_NUMBER=countrycode+number to your .env file.");
+    if (!state.creds.registered && usePairCode && !config.botNumber) {
+      console.error("[GALAXY-MD] BOT_NUMBER is missing. Add BOT_NUMBER=countrycode+number to your .env file for pairing code login.");
       starting = false;
       return;
     }
@@ -251,7 +254,7 @@ async function startBot() {
       ...(version ? { version } : {}),
       auth: state,
       logger: pino({ level: "silent" }),
-      printQRInTerminal: false,
+      printQRInTerminal: !usePairCode,
       // Android browser receives real view-once media; macOS/web only gets a stub.
       browser: typeof Browsers?.android === "function"
         ? Browsers.android("13")
@@ -330,6 +333,10 @@ async function startBot() {
         console.log("[GALAXY-MD] Connecting to WhatsApp using saved session when available...");
       }
 
+      if (update.qr && !usePairCode) {
+        console.log("\n[GALAXY-MD] Scan the QR above: WhatsApp → Linked devices → Link a device.\n");
+      }
+
       if (connection === "open") {
         console.log(`[GALAXY-MD] ${config.botName} connected successfully! 🚀`);
       }
@@ -355,7 +362,11 @@ async function startBot() {
       }
     });
 
-    if (!state.creds.registered) {
+    if (!state.creds.registered && !usePairCode) {
+      console.log("[GALAXY-MD] Login mode: QR code. Scan the QR printed in this terminal to link the bot.");
+    }
+
+    if (!state.creds.registered && usePairCode) {
       const number = String(config.botNumber).replace(/\D/g, "");
       if (number.length >= 8) {
         setTimeout(async () => {
