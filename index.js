@@ -7,6 +7,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const pino = require("pino");
 const config = require("./config");
+const { handleAIMessage } = require("./ai-agent");
 
 const SESSION_DIR = process.env.SESSION_DIR ? path.resolve(process.env.SESSION_DIR) : path.join(__dirname, "session");
 const PLUGINS_DIR = path.join(__dirname, "plugins");
@@ -252,7 +253,7 @@ async function startBot() {
       auth: state,
       logger: pino({ level: "silent" }),
       printQRInTerminal: false,
-      browser: typeof Browsers?.macOS === "function" ? Browsers.macOS("Safari") : ["Mac OS", "Safari", config.version],
+      browser: String(process.env.WA_BROWSER || "").toLowerCase() === "android" ? ["Android", "ANDROID_PHONE", "14.0.0"] : (typeof Browsers?.macOS === "function" ? Browsers.macOS("Safari") : ["Mac OS", "Safari", config.version]),
       markOnlineOnConnect: false,
       syncFullHistory: false,
     });
@@ -428,7 +429,8 @@ async function startBot() {
             botIsAdmin = !!(botParticipant?.admin || botParticipant?.superadmin);
             if (!botIsAdmin) {
               // Do not block normal bot commands when the bot is not a group admin.
-              console.warn("[GALAXY-MD] Bot is not confirmed as a group admin; group-admin features are disabled.");
+              // The AI handler independently refuses group AI unless botIsAdmin is true.
+              console.warn("[GALAXY-MD] Bot is not confirmed as a group admin; group-admin features and group AI are disabled.");
             } else {
               if (feature("welcome") && !message.key?.fromMe && message.messageStubType === 27) {
                 await sock.sendMessage(jid, { text: "👋 Welcome to the group!", mentions: [message.key?.participant, message.key?.participantAlt].filter(Boolean) }).catch(() => {});
@@ -439,6 +441,59 @@ async function startBot() {
                 continue;
               }
             }
+          }
+
+          // AI is opt-in per chat. Use .ai on / .ai off to control it.
+          const commandText = text.startsWith(config.prefix) ? text.slice(config.prefix.length).trim() : "";
+          const aiToggleMatch = commandText.match(/^ai(?:\s+(on|off|status))?\s*$/i);
+          if (aiToggleMatch) {
+            const action = String(aiToggleMatch[1] || "status").toLowerCase();
+            const isGroupChat = jid.endsWith("@g.us");
+            const trustedIds = [
+              message.key?.participant,
+              message.key?.participantAlt,
+              ...(message.key?.fromMe ? [sock.user?.id, sock.user?.lid, config.botNumber] : [message.key?.remoteJid]),
+            ].filter(Boolean);
+            const trustedNumbers = trustedIds.map((id) => String(id).split("@")[0].split(":")[0].replace(/\D/g, "")).filter(Boolean);
+            const trustedUsers = [
+              String(config.botNumber || "").replace(/\D/g, ""),
+              String(data.ownerNumber || config.ownerNumber || "").replace(/\D/g, ""),
+              ...(config.sudoNumbers || []),
+              ...(Array.isArray(data.sudo) ? data.sudo : []),
+            ].filter(Boolean);
+            const isBotOwnerOrSudo = trustedNumbers.some((number) =>
+              trustedUsers.some((allowed) => number === allowed || number.endsWith(allowed) || allowed.endsWith(number))
+            );
+
+            if (isGroupChat && !senderIsAdmin && !isBotOwnerOrSudo) {
+              await sock.sendMessage(jid, { text: "AI on/off maattan group admin allenkil bot owner/SUDO aayirikkanam." }, { quoted: message });
+              continue;
+            }
+            if (isGroupChat && action === "on" && !botIsAdmin) {
+              await sock.sendMessage(jid, { text: "AI enable cheyyan njan ee groupil admin aayirikkanam." }, { quoted: message });
+              continue;
+            }
+
+            data.aiChats = data.aiChats && typeof data.aiChats === "object" ? data.aiChats : {};
+            if (action === "on") data.aiChats[jid] = true;
+            else if (action === "off") data.aiChats[jid] = false;
+
+            try {
+              fs.writeFileSync(dataFile, JSON.stringify(data, null, 2) + "\n", "utf8");
+            } catch (error) {
+              console.error("[GALAXY-MD] Could not save AI chat setting:", error.message || error);
+              await sock.sendMessage(jid, { text: "AI setting save cheyyan pattiyilla. File permission check cheyyu." }, { quoted: message });
+              continue;
+            }
+
+            const enabled = data.aiChats[jid] === true;
+            const statusText = action === "on"
+              ? "AI enabled for this chat."
+              : action === "off"
+                ? "AI disabled for this chat."
+                : (enabled ? "AI is ON in this chat." : "AI is OFF in this chat.");
+            await sock.sendMessage(jid, { text: statusText + "\nCommands: " + config.prefix + "ai on | " + config.prefix + "ai off | " + config.prefix + "ai status" }, { quoted: message });
+            continue;
           }
 
           if (!text.startsWith(config.prefix)) {
@@ -470,7 +525,7 @@ async function startBot() {
             }
             if (passivePluginHandled) continue;
 
-            // Deterministic auto-download runs for supported URLs.
+            // Deterministic auto-download runs before AI so a normal reply cannot swallow a supported URL.
             // YouTube links are intentionally excluded and remain command-based.
             if (!message.key?.fromMe && text) {
               const autoDownload = getAutoDownloadPlugin(text, plugins);
@@ -493,6 +548,14 @@ async function startBot() {
               }
             }
 
+            // Gemini AI: DMs respond to readable text; groups only when this bot is an admin.
+            const aiHandled = await handleAIMessage({
+              sock, jid, message, text, config, plugins, receivedAt,
+              senderIsAdmin, botIsAdmin,
+              aiEnabled: data.aiChats?.[jid] === true,
+              setMode: (mode) => { config.mode = mode; },
+            });
+            if (aiHandled) continue;
             continue;
           }
 
