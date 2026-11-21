@@ -5,7 +5,7 @@ const path = require("path");
 
 // View once (.autovv) work aavaan android browser venam: default android.
 // .env-il WA_BROWSER=chrome (allenkil verey ethenkilum) ittaal athu use cheyyum.
-process.env.WA_BROWSER = process.env.WA_BROWSER || "android";
+process.env.WA_BROWSER = process.env.WA_BROWSER || "safari";
 
 function readJson(file) {
   try { return JSON.parse(fs.readFileSync(path.join(__dirname, file), "utf8")); }
