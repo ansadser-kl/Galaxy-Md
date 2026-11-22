@@ -1,6 +1,6 @@
 "use strict";
 
-const BASE = "https://ansadkl-file.onrender.com";
+const BASE = "https://galaxy-md-w3vr.onrender.com";
 const CHUNK = 8 * 1024 * 1024;
 const MAX_SIZE = 100 * 1024 * 1024; // bot memory kaaranam, venel koottaam
 
