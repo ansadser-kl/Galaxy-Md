@@ -3,9 +3,12 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { Readable } = require("stream");
-const { pipeline } = require("stream/promises");
+const { execFile } = require("child_process");
+const { promisify } = require("util");
 
+const execFileAsync = promisify(execFile);
+
+const YTDLP_BIN = process.env.YTDLP_PATH || "yt-dlp";
 const pendingChoices = new Map();
 const CHOICE_TTL = 10 * 60 * 1000;
 
@@ -46,10 +49,58 @@ function safeFilename(value) {
     .slice(0, 100) || "youtube-video";
 }
 
+async function getVideoMetadata(url) {
+  const { stdout } = await execFileAsync(
+    YTDLP_BIN,
+    ["--no-warnings", "--no-playlist", "--dump-single-json", url],
+    {
+      timeout: 60000,
+      maxBuffer: 25 * 1024 * 1024
+    }
+  );
+  return JSON.parse(stdout);
+}
+
+function extractQualityChoices(info) {
+  const formats = Array.isArray(info?.formats) ? info.formats : [];
+  const byHeight = new Map();
+
+  for (const fmt of formats) {
+    const height = Number(fmt?.height);
+    const hasVideo = fmt?.vcodec && fmt.vcodec !== "none";
+    if (!Number.isFinite(height) || height <= 0 || !hasVideo) continue;
+
+    const rawSize = Number(fmt?.filesize || fmt?.filesize_approx || 0);
+    const existing = byHeight.get(height);
+
+    // Prefer mp4 / higher known filesize for the same resolution
+    const scoreFmt = (f) => {
+      let score = 0;
+      if (f?.ext === "mp4") score += 10;
+      if (f?.acodec && f.acodec !== "none") score += 5;
+      if (Number(f?.filesize || f?.filesize_approx || 0) > 0) score += 3;
+      return score;
+    };
+
+    if (!existing || scoreFmt(fmt) > scoreFmt(existing.fmt)) {
+      byHeight.set(height, {
+        height,
+        quality: height + "p",
+        size: rawSize > 0 ? formatBytes(rawSize) : "Size unavailable",
+        fmt
+      });
+    }
+  }
+
+  return [...byHeight.values()]
+    .sort((a, b) => b.height - a.height)
+    .map(({ height, quality, size }) => ({ height, quality, size }));
+}
+
 module.exports = {
   name: "ytv",
   aliases: [],
-  description: "Download YouTube video in selected quality",
+  description: "Download YouTube video in selected quality using yt-dlp",
   category: "Downloader",
 
   async execute({ sock, jid, message, text, args }) {
@@ -65,74 +116,54 @@ module.exports = {
     }
 
     try {
-      const statusMessage = await sock.sendMessage(
+      await sock.sendMessage(
         jid,
-        { text: "🔎 Getting available video qualities..." },
+        { text: "🔎 Getting available video qualities via yt-dlp..." },
         { quoted: message }
       );
 
-      const apiUrl = "https://v2.api-varhad.my.id/download/ytmp4?url=" + encodeURIComponent(url);
-      const response = await fetch(apiUrl, {
-        headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
-        signal: AbortSignal.timeout(60000)
-      });
+      const info = await getVideoMetadata(url);
+      const choices = extractQualityChoices(info);
 
-      if (!response.ok) throw new Error("API error");
-      const data = await response.json();
-      const result = data?.result;
-
-      // API: result.videos = [{ quality: 720, url }, ...] (chila quality randu thavana varum)
-      // -> duplicate kalanju, height order-il (1080p, 720p, ...) list aakkum
-      const byQuality = new Map();
-      for (const video of Array.isArray(result?.videos) ? result.videos : []) {
-        const height = parseInt(video?.quality, 10);
-        if (!height || typeof video?.url !== "string" || !/^https?:\/\//i.test(video.url)) continue;
-        if (!byQuality.has(height)) byQuality.set(height, video.url);
+      if (!choices.length) {
+        throw new Error("No video formats found");
       }
-      const downloads = [...byQuality]
-        .sort((a, b) => b[0] - a[0])
-        .map(([height, link]) => ({ quality: height + "p", url: link }));
 
-      if (data?.status !== true || !downloads.length) throw new Error("API error");
-
-      const videoId = getVideoId(url);
-      const choices = await Promise.all(downloads.map(async (item) => {
-        let size = "Size unavailable";
-        try {
-          const head = await fetch(item.url, {
-            method: "HEAD",
-            redirect: "follow",
-            headers: { "User-Agent": "Mozilla/5.0" },
-            signal: AbortSignal.timeout(8000)
-          });
-          const length = head.headers.get("content-length");
-          if (length) size = formatBytes(length);
-        } catch {}
-        return { ...item, size };
-      }));
-
+      const videoId = info?.id || getVideoId(url);
+      const title = String(info?.title || "YouTube video");
       const key = jid + ":" + senderId(message, jid);
+
       pendingChoices.set(key, {
+        url,
+        title,
         downloads: choices,
-        title: String(result.title || "YouTube video"),
-        createdAt: Date.now(),
-        statusKey: statusMessage.key
+        createdAt: Date.now()
       });
 
-      const lines = choices.map((item, index) =>
-        (index + 1) + ". " + String(item.quality || "Unknown quality") + " — " + item.size
+      const lines = choices.map(
+        (item, index) => (index + 1) + ". " + item.quality + " — " + item.size
       );
-      await sock.sendMessage(jid, {
-        text: "🎬 *" + String(result.title || "YouTube video").slice(0, 180) + "*\n" +
-          "🆔 Video ID: " + videoId + "\n\n" +
-          "📥 *Available video qualities*\n" + lines.join("\n") + "\n\n" +
-          "Reply with the number of your preferred quality.\n" +
-          "⏳ Selection expires in 10 minutes."
-      }, { quoted: message });
 
+      await sock.sendMessage(
+        jid,
+        {
+          text:
+            "🎬 *" + title.slice(0, 180) + "*\n" +
+            "🆔 Video ID: " + videoId + "\n\n" +
+            "📥 *Available video qualities*\n" +
+            lines.join("\n") + "\n\n" +
+            "Reply with the number of your preferred quality.\n" +
+            "⏳ Selection expires in 10 minutes."
+        },
+        { quoted: message }
+      );
     } catch (error) {
-      console.error("[GALAXY-MD] .ytv error:", error);
-      await sock.sendMessage(jid, { text: "❌ Video quality list failed!\nAPI error" }, { quoted: message });
+      console.error("[GALAXY-MD] .ytv metadata error:", error);
+      await sock.sendMessage(
+        jid,
+        { text: "❌ Video quality list failed!\nyt-dlp error: " + (error?.message || "Unknown error") },
+        { quoted: message }
+      );
     }
   },
 
@@ -146,25 +177,32 @@ module.exports = {
 
     if (Date.now() - pending.createdAt > CHOICE_TTL) {
       pendingChoices.delete(key);
-      await sock.sendMessage(jid, { text: "⌛ Quality selection expired. Please use .ytv again." }, { quoted: message });
+      await sock.sendMessage(
+        jid,
+        { text: "⌛ Quality selection expired. Please use .ytv again." },
+        { quoted: message }
+      );
       return true;
     }
 
     const index = Number(choice) - 1;
     if (index < 0 || index >= pending.downloads.length) {
-      await sock.sendMessage(jid, {
-        text: "❌ Invalid number. Reply with a number from 1 to " + pending.downloads.length + "."
-      }, { quoted: message });
+      await sock.sendMessage(
+        jid,
+        { text: "❌ Invalid number. Reply with a number from 1 to " + pending.downloads.length + "." },
+        { quoted: message }
+      );
       return true;
     }
 
     const selected = pending.downloads[index];
     pendingChoices.delete(key);
 
-    const tempFile = path.join(
+    const tempBase = path.join(
       os.tmpdir(),
-      "galaxy-ytv-" + Date.now() + "-" + Math.random().toString(16).slice(2) + ".mp4"
+      "galaxy-ytv-" + Date.now() + "-" + Math.random().toString(16).slice(2)
     );
+    const expectedOutput = tempBase + ".mp4";
     let statusMessage;
 
     const editStatus = async (status) => {
@@ -180,50 +218,87 @@ module.exports = {
     try {
       statusMessage = await sock.sendMessage(
         jid,
-        { text: "⬇️ Downloading " + String(selected.quality || "video") + "..." },
+        { text: "⬇️ Downloading " + selected.quality + " via yt-dlp..." },
         { quoted: message }
       );
 
-      const response = await fetch(selected.url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-          Accept: "video/mp4,video/*;q=0.9,*/*;q=0.8"
-        },
-        redirect: "follow",
-        signal: AbortSignal.timeout(300000)
-      });
+      const formatSelector =
+        `bv*[height<=${selected.height}]+ba/b[height<=${selected.height}]/bv*+ba/b`;
 
-      if (!response.ok || !response.body) throw new Error("API error");
+      await execFileAsync(
+        YTDLP_BIN,
+        [
+          "--no-warnings",
+          "--no-playlist",
+          "-f",
+          formatSelector,
+          "--merge-output-format",
+          "mp4",
+          "-o",
+          tempBase + ".%(ext)s",
+          pending.url
+        ],
+        {
+          timeout: 300000,
+          maxBuffer: 25 * 1024 * 1024
+        }
+      );
 
-      await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(tempFile));
-      const stats = fs.statSync(tempFile);
-      if (!stats.size) throw new Error("API error");
+      // Find produced file (usually tempBase.mp4)
+      const outputFile = fs.existsSync(expectedOutput)
+        ? expectedOutput
+        : fs
+            .readdirSync(os.tmpdir())
+            .map((name) => path.join(os.tmpdir(), name))
+            .find((fullPath) => fullPath.startsWith(tempBase + ".") && fs.statSync(fullPath).size > 0);
 
-      await editStatus("📤 Sending " + String(selected.quality || "video") + "...");
+      if (!outputFile || !fs.existsSync(outputFile)) {
+        throw new Error("Downloaded file not found");
+      }
+
+      const stats = fs.statSync(outputFile);
+      if (!stats.size) {
+        throw new Error("Downloaded file is empty");
+      }
+
+      await editStatus("📤 Sending " + selected.quality + "...");
       const sizeLimit = 180 * 1024 * 1024;
       const filename = safeFilename(pending.title) + ".mp4";
 
       if (stats.size > sizeLimit) {
-        await sock.sendMessage(jid, {
-          document: { url: tempFile },
-          mimetype: "video/mp4",
-          fileName: filename
-        }, { quoted: message });
+        await sock.sendMessage(
+          jid,
+          {
+            document: { url: outputFile },
+            mimetype: "video/mp4",
+            fileName: filename
+          },
+          { quoted: message }
+        );
       } else {
-        await sock.sendMessage(jid, {
-          video: { url: tempFile },
-          mimetype: "video/mp4",
-          fileName: filename
-        }, { quoted: message });
+        await sock.sendMessage(
+          jid,
+          {
+            video: { url: outputFile },
+            mimetype: "video/mp4",
+            fileName: filename
+          },
+          { quoted: message }
+        );
       }
 
       await editStatus("✅ Video download complete!");
     } catch (error) {
       console.error("[GALAXY-MD] .ytv download error:", error);
-      await editStatus("❌ Video download failed!\nAPI error");
+      await editStatus("❌ Video download failed!\nyt-dlp error: " + (error?.message || "Unknown error"));
     } finally {
       try {
-        if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+        const dirFiles = fs.readdirSync(os.tmpdir());
+        for (const name of dirFiles) {
+          if (name.startsWith(path.basename(tempBase))) {
+            fs.unlinkSync(path.join(os.tmpdir(), name));
+          }
+        }
       } catch (err) {
         console.warn("[GALAXY-MD] Could not delete .ytv temp file:", err?.message);
       }
