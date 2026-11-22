@@ -71,21 +71,27 @@ module.exports = {
         { quoted: message }
       );
 
-      const apiUrl = "https://youtube-com-3jtn.onrender.com/api/ytv?url=" + encodeURIComponent(url);
+      const apiUrl = "https://v2.api-varhad.my.id/download/ytmp4?url=" + encodeURIComponent(url);
       const response = await fetch(apiUrl, {
         headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
-        signal: AbortSignal.timeout(90000)
+        signal: AbortSignal.timeout(60000)
       });
 
       if (!response.ok) throw new Error("API error");
       const data = await response.json();
       const result = data?.result;
 
-      // API: result.qualities = { "1080p": url, "720p": url, ... } -> list-aakki height order-il
-      const downloads = Object.entries(result?.qualities || {})
-        .filter(([, u]) => typeof u === "string" && /^https?:\/\//i.test(u))
-        .map(([quality, url]) => ({ quality, url }))
-        .sort((a, b) => (parseInt(b.quality, 10) || 0) - (parseInt(a.quality, 10) || 0));
+      // API: result.videos = [{ quality: 720, url }, ...] (chila quality randu thavana varum)
+      // -> duplicate kalanju, height order-il (1080p, 720p, ...) list aakkum
+      const byQuality = new Map();
+      for (const video of Array.isArray(result?.videos) ? result.videos : []) {
+        const height = parseInt(video?.quality, 10);
+        if (!height || typeof video?.url !== "string" || !/^https?:\/\//i.test(video.url)) continue;
+        if (!byQuality.has(height)) byQuality.set(height, video.url);
+      }
+      const downloads = [...byQuality]
+        .sort((a, b) => b[0] - a[0])
+        .map(([height, link]) => ({ quality: height + "p", url: link }));
 
       if (data?.status !== true || !downloads.length) throw new Error("API error");
 
