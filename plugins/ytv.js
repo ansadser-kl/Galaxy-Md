@@ -13,7 +13,7 @@ const PROXY_LIMIT = Number(process.env.PROXY_LIMIT) || 70; // 50, 70, or 100
 const PROXY_API_URL = (
   process.env.PROXY_API_URL || `https://proxies.xcasper.space/test?limit=${PROXY_LIMIT}`
 ).trim();
-const MAX_PROXY_TRIES = 10; // Try top 10 fastest alive proxies
+const MAX_PROXY_TRIES = 10;
 const YTDLP_COOKIES = (process.env.YTDLP_COOKIES || "").trim();
 
 const pendingChoices = new Map();
@@ -120,12 +120,24 @@ async function fetchFastestAliveProxies() {
   return proxyUrls;
 }
 
+function extractCleanErrorMessage(err) {
+  const stderr = String(err?.stderr || "").trim();
+  if (stderr) {
+    const errorLine = stderr
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.startsWith("ERROR:"));
+    if (errorLine) return errorLine;
+    return stderr.split(/\r?\n/).slice(-1)[0];
+  }
+  return err?.message || "Unknown error";
+}
+
 async function runYtDlpWithFastestProxy(url, extraArgs, options = {}) {
   const freshProxies = await fetchFastestAliveProxies();
   const candidates = [];
   const seen = new Set();
 
-  // If a preferred proxy worked during metadata fetch, try it first
   if (options.preferredProxy?.url) {
     candidates.push(options.preferredProxy);
     seen.add(options.preferredProxy.url);
@@ -142,12 +154,13 @@ async function runYtDlpWithFastestProxy(url, extraArgs, options = {}) {
     throw new Error("No alive proxies returned by proxy API");
   }
 
-  let lastError = null;
+  const failures = [];
 
   for (const proxy of candidates) {
     const args = [
       "--no-warnings",
       "--no-playlist",
+      "--no-check-certificates",
       "--socket-timeout",
       "15",
       "--proxy",
@@ -168,13 +181,15 @@ async function runYtDlpWithFastestProxy(url, extraArgs, options = {}) {
         usedProxy: proxy
       };
     } catch (err) {
-      lastError = new Error(
-        `Proxy ${proxy.ip}:${proxy.port} (${Math.round(proxy.latencyMs)}ms) failed: ${err?.message || "Unknown error"}`
+      const reason = extractCleanErrorMessage(err);
+      console.warn(
+        `[GALAXY-MD] Proxy ${proxy.ip}:${proxy.port} (${Math.round(proxy.latencyMs)}ms) failed: ${reason}`
       );
+      failures.push(`${proxy.ip}:${proxy.port} -> ${reason}`);
     }
   }
 
-  throw lastError || new Error("All fast alive proxies failed in yt-dlp");
+  throw new Error(failures[failures.length - 1] || "All fast alive proxies failed in yt-dlp");
 }
 
 function extractQualityChoices(info) {
