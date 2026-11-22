@@ -8,6 +8,23 @@ const baileys = require("baileys");
 const downloadMediaMessage = baileys.downloadMediaMessage;
 const execFileAsync = promisify(execFile);
 
+// ffmpeg എവിടെയാണെന്ന് കണ്ടെത്തുന്നു
+function resolveFfmpeg() {
+  const candidates = [
+    process.env.FFMPEG_PATH,
+    path.join(os.homedir(), "bin", "ffmpeg"),
+    path.join(process.cwd(), "bin", "ffmpeg")
+  ];
+  for (const file of candidates) {
+    if (file && fs.existsSync(file)) return file;
+  }
+  try {
+    const staticPath = require("ffmpeg-static");
+    if (staticPath && fs.existsSync(staticPath)) return staticPath;
+  } catch {}
+  return "ffmpeg";
+}
+
 module.exports = {
   name: "sticker",
   aliases: [],
@@ -47,7 +64,7 @@ module.exports = {
           "-t", "6",
           "-vf", "fps=15,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
           "-an", "-vcodec", "libwebp", "-lossless", "0", "-q:v", "50",
-          "-loop", "0", "-preset", "default", "-vsync", "0",
+          "-loop", "0", "-preset", "default",
           "-fs", "500K"
         );
       } else {
@@ -58,13 +75,19 @@ module.exports = {
       }
       args.push(output);
 
-      await execFileAsync("ffmpeg", args, { timeout: 120000, maxBuffer: 1024 * 1024 });
+      await execFileAsync(resolveFfmpeg(), args, { timeout: 120000, maxBuffer: 10 * 1024 * 1024 });
       await sock.sendMessage(jid, { sticker: fs.readFileSync(output) }, { quoted: message });
     } catch (error) {
-      console.error("[GALAXY-MD] Sticker conversion failed:", error.message);
+      const detail = String(error.stderr || error.message || "").trim().split("\n").slice(-3).join(" ");
+      console.error("[GALAXY-MD] Sticker conversion failed:", detail);
+      const notFound = error.code === "ENOENT";
       await sock.sendMessage(
         jid,
-        { text: "Sticker conversion failed. Try a shorter video (maximum 6 seconds) and check FFmpeg is installed with libwebp support." },
+        {
+          text: notFound
+            ? "❌ FFmpeg കണ്ടെത്താനായില്ല. ~/bin/ffmpeg ഇൻസ്റ്റാൾ ചെയ്തോ എന്ന് നോക്കൂ."
+            : "❌ Sticker conversion failed. Try a shorter video (maximum 6 seconds).\n" + detail.slice(0, 150)
+        },
         { quoted: message }
       );
     } finally {
