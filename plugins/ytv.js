@@ -4,16 +4,13 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFile } = require("child_process");
-const { promisify } = require("util");
-
-const execFileAsync = promisify(execFile);
-
-const YTDLP_BIN = process.env.YTDLP_PATH || "yt-dlp";
-const DEFAULT_COOKIES_FILE = path.join(process.cwd(), "cookies.txt");
-const YTDLP_COOKIES = (process.env.YTDLP_COOKIES || "").trim();
 
 const pendingChoices = new Map();
 const CHOICE_TTL = 10 * 60 * 1000;
+
+const YTDLP = process.env.YTDLP_PATH || "yt-dlp";
+const COOKIES = process.env.YTDLP_COOKIES || path.join(process.cwd(), "cookies.txt");
+const MAX_HEIGHT = 1080;
 
 function senderId(message, jid) {
   return message.key?.participant || message.key?.participantAlt || jid;
@@ -52,90 +49,74 @@ function safeFilename(value) {
     .slice(0, 100) || "youtube-video";
 }
 
-function resolveCookiesPath() {
-  if (YTDLP_COOKIES && fs.existsSync(YTDLP_COOKIES)) {
-    return YTDLP_COOKIES;
-  }
-  if (fs.existsSync(DEFAULT_COOKIES_FILE)) {
-    return DEFAULT_COOKIES_FILE;
-  }
-  return "";
-}
-
-function buildYtDlpArgs(extraArgs) {
-  const args = ["--no-warnings", "--no-playlist"];
-  const cookiesPath = resolveCookiesPath();
-  if (cookiesPath) {
-    args.push("--cookies", cookiesPath);
-  }
-  args.push(...extraArgs);
+function baseArgs() {
+  const args = ["--no-playlist", "--no-warnings", "--js-runtimes", "node"];
+  if (fs.existsSync(COOKIES)) args.push("--cookies", COOKIES);
   return args;
 }
 
-function extractCleanErrorMessage(err) {
-  const stderr = String(err?.stderr || "").trim();
-  if (stderr) {
-    const errorLine = stderr
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => line.startsWith("ERROR:"));
-    if (errorLine) return errorLine;
-    return stderr.split(/\r?\n/).slice(-1)[0];
-  }
-  return err?.message || "Unknown error";
+function runYtdlp(args, timeout) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      YTDLP,
+      args,
+      { maxBuffer: 100 * 1024 * 1024, timeout },
+      (error, stdout, stderr) => {
+        if (error) {
+          error.message = (stderr || error.message || "yt-dlp error").toString().trim().slice(-500);
+          return reject(error);
+        }
+        resolve(stdout);
+      }
+    );
+  });
 }
 
-async function getVideoMetadata(url) {
-  const { stdout } = await execFileAsync(
-    YTDLP_BIN,
-    buildYtDlpArgs(["--dump-single-json", url]),
-    {
-      timeout: 60000,
-      maxBuffer: 25 * 1024 * 1024
-    }
-  );
-  return JSON.parse(stdout);
-}
-
-function extractQualityChoices(info) {
+// yt-dlp JSON-ൽ നിന്ന് ക്വാളിറ്റി ലിസ്റ്റ് ഉണ്ടാക്കുന്നു
+function buildChoices(info) {
   const formats = Array.isArray(info?.formats) ? info.formats : [];
+  const fsize = (f) => Number(f.filesize || f.filesize_approx || 0);
+
+  const audioOnly = formats.filter(f => f.vcodec === "none" && f.acodec && f.acodec !== "none");
+  const bestAudio = audioOnly
+    .filter(f => f.ext === "m4a")
+    .sort((a, b) => fsize(b) - fsize(a))[0] || audioOnly.sort((a, b) => fsize(b) - fsize(a))[0];
+  const audioSize = bestAudio ? fsize(bestAudio) : 0;
+
+  const videos = formats.filter(f =>
+    f.vcodec && f.vcodec !== "none" && Number(f.height) > 0 && Number(f.height) <= MAX_HEIGHT
+  );
+
   const byHeight = new Map();
-
-  for (const fmt of formats) {
-    const height = Number(fmt?.height);
-    const hasVideo = fmt?.vcodec && fmt.vcodec !== "none";
-    if (!Number.isFinite(height) || height <= 0 || !hasVideo) continue;
-
-    const rawSize = Number(fmt?.filesize || fmt?.filesize_approx || 0);
-    const existing = byHeight.get(height);
-
-    const scoreFmt = (f) => {
-      let score = 0;
-      if (f?.ext === "mp4") score += 10;
-      if (f?.acodec && f.acodec !== "none") score += 5;
-      if (Number(f?.filesize || f?.filesize_approx || 0) > 0) score += 3;
-      return score;
-    };
-
-    if (!existing || scoreFmt(fmt) > scoreFmt(existing.fmt)) {
-      byHeight.set(height, {
-        height,
-        quality: height + "p",
-        size: rawSize > 0 ? formatBytes(rawSize) : "Size unavailable",
-        fmt
-      });
-    }
+  for (const f of videos) {
+    const list = byHeight.get(f.height) || [];
+    list.push(f);
+    byHeight.set(f.height, list);
   }
 
-  return [...byHeight.values()]
-    .sort((a, b) => b.height - a.height)
-    .map(({ height, quality, size }) => ({ height, quality, size }));
+  const choices = [];
+  for (const [height, list] of byHeight) {
+    const preferred =
+      list.find(f => String(f.vcodec).startsWith("avc1")) ||
+      list.find(f => f.ext === "mp4") ||
+      list[0];
+    let total = fsize(preferred);
+    const hasAudio = preferred.acodec && preferred.acodec !== "none";
+    if (total && !hasAudio) total += audioSize;
+    choices.push({
+      height,
+      quality: height + "p",
+      size: total ? "~" + formatBytes(total) : "Size unavailable"
+    });
+  }
+
+  return choices.sort((a, b) => b.height - a.height);
 }
 
 module.exports = {
   name: "ytv",
   aliases: [],
-  description: "Download YouTube video in selected quality using yt-dlp and saved cookies",
+  description: "Download YouTube video in selected quality",
   category: "Downloader",
 
   async execute({ sock, jid, message, text, args }) {
@@ -151,54 +132,46 @@ module.exports = {
     }
 
     try {
-      await sock.sendMessage(
+      const statusMessage = await sock.sendMessage(
         jid,
         { text: "🔎 Getting available video qualities..." },
         { quoted: message }
       );
 
-      const info = await getVideoMetadata(url);
-      const choices = extractQualityChoices(info);
+      const stdout = await runYtdlp([...baseArgs(), "-J", url], 90000);
+      const info = JSON.parse(stdout);
+      const choices = buildChoices(info);
 
-      if (!choices.length) {
-        throw new Error("No video formats found");
-      }
+      if (!choices.length) throw new Error("No video formats found");
 
-      const videoId = info?.id || getVideoId(url);
-      const title = String(info?.title || "YouTube video");
+      const videoId = info.id || getVideoId(url);
+      const title = String(info.title || "YouTube video");
+
       const key = jid + ":" + senderId(message, jid);
-
       pendingChoices.set(key, {
         url,
-        title,
         downloads: choices,
-        createdAt: Date.now()
+        title,
+        createdAt: Date.now(),
+        statusKey: statusMessage.key
       });
 
-      const lines = choices.map(
-        (item, index) => (index + 1) + ". " + item.quality + " — " + item.size
+      const lines = choices.map((item, index) =>
+        (index + 1) + ". " + item.quality + " — " + item.size
       );
+      await sock.sendMessage(jid, {
+        text: "🎬 *" + title.slice(0, 180) + "*\n" +
+          "🆔 Video ID: " + videoId + "\n\n" +
+          "📥 *Available video qualities*\n" + lines.join("\n") + "\n\n" +
+          "Reply with the number of your preferred quality.\n" +
+          "⏳ Selection expires in 10 minutes."
+      }, { quoted: message });
 
-      await sock.sendMessage(
-        jid,
-        {
-          text:
-            "🎬 *" + title.slice(0, 180) + "*\n" +
-            "🆔 Video ID: " + videoId + "\n\n" +
-            "📥 *Available video qualities*\n" +
-            lines.join("\n") + "\n\n" +
-            "Reply with the number of your preferred quality.\n" +
-            "⏳ Selection expires in 10 minutes."
-        },
-        { quoted: message }
-      );
     } catch (error) {
-      console.error("[GALAXY-MD] .ytv metadata error:", error);
-      await sock.sendMessage(
-        jid,
-        { text: "❌ Video quality list failed!\n" + extractCleanErrorMessage(error) },
-        { quoted: message }
-      );
+      console.error("[GALAXY-MD] .ytv error:", error);
+      await sock.sendMessage(jid, {
+        text: "❌ Video quality list failed!\n" + String(error.message || "yt-dlp error").slice(0, 200)
+      }, { quoted: message });
     }
   },
 
@@ -212,32 +185,25 @@ module.exports = {
 
     if (Date.now() - pending.createdAt > CHOICE_TTL) {
       pendingChoices.delete(key);
-      await sock.sendMessage(
-        jid,
-        { text: "⌛ Quality selection expired. Please use .ytv again." },
-        { quoted: message }
-      );
+      await sock.sendMessage(jid, { text: "⌛ Quality selection expired. Please use .ytv again." }, { quoted: message });
       return true;
     }
 
     const index = Number(choice) - 1;
     if (index < 0 || index >= pending.downloads.length) {
-      await sock.sendMessage(
-        jid,
-        { text: "❌ Invalid number. Reply with a number from 1 to " + pending.downloads.length + "." },
-        { quoted: message }
-      );
+      await sock.sendMessage(jid, {
+        text: "❌ Invalid number. Reply with a number from 1 to " + pending.downloads.length + "."
+      }, { quoted: message });
       return true;
     }
 
     const selected = pending.downloads[index];
     pendingChoices.delete(key);
 
-    const tempBase = path.join(
-      os.tmpdir(),
-      "galaxy-ytv-" + Date.now() + "-" + Math.random().toString(16).slice(2)
-    );
-    const expectedOutput = tempBase + ".mp4";
+    const tmpDir = os.tmpdir();
+    const prefix = "galaxy-ytv-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+    const outTemplate = path.join(tmpDir, prefix + ".%(ext)s");
+    let tempFile = null;
     let statusMessage;
 
     const editStatus = async (status) => {
@@ -257,79 +223,56 @@ module.exports = {
         { quoted: message }
       );
 
+      const h = selected.height;
       const formatSelector =
-        `bv*[height<=${selected.height}]+ba/b[height<=${selected.height}]/bv*+ba/b`;
+        "bv*[height<=" + h + "][vcodec^=avc1]+ba[ext=m4a]/" +
+        "bv*[height<=" + h + "][ext=mp4]+ba[ext=m4a]/" +
+        "b[height<=" + h + "][ext=mp4]/" +
+        "b[height<=" + h + "]";
 
-      await execFileAsync(
-        YTDLP_BIN,
-        buildYtDlpArgs([
-          "-f",
-          formatSelector,
-          "--merge-output-format",
-          "mp4",
-          "-o",
-          tempBase + ".%(ext)s",
-          pending.url
-        ]),
-        {
-          timeout: 300000,
-          maxBuffer: 25 * 1024 * 1024
-        }
+      await runYtdlp([
+        ...baseArgs(),
+        "-f", formatSelector,
+        "--merge-output-format", "mp4",
+        "-o", outTemplate,
+        pending.url
+      ], 15 * 60 * 1000);
+
+      const found = fs.readdirSync(tmpDir).find(
+        name => name.startsWith(prefix) && !name.endsWith(".part") && !name.endsWith(".ytdl")
       );
+      if (!found) throw new Error("Downloaded file not found");
+      tempFile = path.join(tmpDir, found);
 
-      const outputFile = fs.existsSync(expectedOutput)
-        ? expectedOutput
-        : fs
-            .readdirSync(os.tmpdir())
-            .map((name) => path.join(os.tmpdir(), name))
-            .find((fullPath) => fullPath.startsWith(tempBase + ".") && fs.statSync(fullPath).size > 0);
-
-      if (!outputFile || !fs.existsSync(outputFile)) {
-        throw new Error("Downloaded file not found");
-      }
-
-      const stats = fs.statSync(outputFile);
-      if (!stats.size) {
-        throw new Error("Downloaded file is empty");
-      }
+      const stats = fs.statSync(tempFile);
+      if (!stats.size) throw new Error("Empty file");
 
       await editStatus("📤 Sending " + selected.quality + "...");
       const sizeLimit = 180 * 1024 * 1024;
       const filename = safeFilename(pending.title) + ".mp4";
 
       if (stats.size > sizeLimit) {
-        await sock.sendMessage(
-          jid,
-          {
-            document: { url: outputFile },
-            mimetype: "video/mp4",
-            fileName: filename
-          },
-          { quoted: message }
-        );
+        await sock.sendMessage(jid, {
+          document: { url: tempFile },
+          mimetype: "video/mp4",
+          fileName: filename
+        }, { quoted: message });
       } else {
-        await sock.sendMessage(
-          jid,
-          {
-            video: { url: outputFile },
-            mimetype: "video/mp4",
-            fileName: filename
-          },
-          { quoted: message }
-        );
+        await sock.sendMessage(jid, {
+          video: { url: tempFile },
+          mimetype: "video/mp4",
+          fileName: filename
+        }, { quoted: message });
       }
 
       await editStatus("✅ Video download complete!");
     } catch (error) {
       console.error("[GALAXY-MD] .ytv download error:", error);
-      await editStatus("❌ Video download failed!\n" + extractCleanErrorMessage(error));
+      await editStatus("❌ Video download failed!\n" + String(error.message || "yt-dlp error").slice(0, 200));
     } finally {
       try {
-        const dirFiles = fs.readdirSync(os.tmpdir());
-        for (const name of dirFiles) {
-          if (name.startsWith(path.basename(tempBase))) {
-            fs.unlinkSync(path.join(os.tmpdir(), name));
-          }
+        for (const name of fs.readdirSync(tmpDir)) {
+          if (name.startsWith(prefix)) fs.unlinkSync(path.join(tmpDir, name));
         }
       } catch (err) {
         console.warn("[GALAXY-MD] Could not delete .ytv temp file:", err?.message);
