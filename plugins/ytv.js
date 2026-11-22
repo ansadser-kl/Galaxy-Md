@@ -9,11 +9,7 @@ const { promisify } = require("util");
 const execFileAsync = promisify(execFile);
 
 const YTDLP_BIN = process.env.YTDLP_PATH || "yt-dlp";
-const PROXY_LIMIT = Number(process.env.PROXY_LIMIT) || 70; // 50, 70, or 100
-const PROXY_API_URL = (
-  process.env.PROXY_API_URL || `https://proxies.xcasper.space/test?limit=${PROXY_LIMIT}`
-).trim();
-const MAX_PROXY_TRIES = 10;
+const DEFAULT_COOKIES_FILE = path.join(process.cwd(), "cookies.txt");
 const YTDLP_COOKIES = (process.env.YTDLP_COOKIES || "").trim();
 
 const pendingChoices = new Map();
@@ -56,68 +52,24 @@ function safeFilename(value) {
     .slice(0, 100) || "youtube-video";
 }
 
-function getLatencyMs(item) {
-  if (Number.isFinite(Number(item?.latency_ms))) {
-    return Number(item.latency_ms);
+function resolveCookiesPath() {
+  if (YTDLP_COOKIES && fs.existsSync(YTDLP_COOKIES)) {
+    return YTDLP_COOKIES;
   }
-  if (Number.isFinite(Number(item?.response_time))) {
-    return Number(item.response_time) * 1000;
+  if (fs.existsSync(DEFAULT_COOKIES_FILE)) {
+    return DEFAULT_COOKIES_FILE;
   }
-  return Number.POSITIVE_INFINITY;
+  return "";
 }
 
-function buildProxyUrl(item) {
-  if (!item || typeof item !== "object") return null;
-  if (item.alive !== true) return null;
-  if (!item.ip || !item.port) return null;
-
-  const proto = String(item.type || item.protocol || "http").trim().toLowerCase();
-  const auth =
-    item.username && item.password
-      ? `${encodeURIComponent(item.username)}:${encodeURIComponent(item.password)}@`
-      : "";
-
-  return `${proto}://${auth}${String(item.ip).trim()}:${String(item.port).trim()}`;
-}
-
-async function fetchFastestAliveProxies() {
-  const res = await fetch(PROXY_API_URL, {
-    headers: {
-      Accept: "application/json",
-      "User-Agent": "Mozilla/5.0"
-    },
-    signal: AbortSignal.timeout(20000)
-  });
-
-  if (!res.ok) {
-    throw new Error(`Proxy API failed with HTTP ${res.status}`);
+function buildYtDlpArgs(extraArgs) {
+  const args = ["--no-warnings", "--no-playlist"];
+  const cookiesPath = resolveCookiesPath();
+  if (cookiesPath) {
+    args.push("--cookies", cookiesPath);
   }
-
-  const data = await res.json();
-  const list = Array.isArray(data?.proxies) ? data.proxies : [];
-
-  const aliveSorted = list
-    .filter((item) => item && item.alive === true)
-    .sort((a, b) => getLatencyMs(a) - getLatencyMs(b));
-
-  const proxyUrls = [];
-  const seen = new Set();
-
-  for (const item of aliveSorted) {
-    const proxyUrl = buildProxyUrl(item);
-    if (proxyUrl && !seen.has(proxyUrl)) {
-      seen.add(proxyUrl);
-      proxyUrls.push({
-        url: proxyUrl,
-        latencyMs: getLatencyMs(item),
-        ip: item.ip,
-        port: item.port
-      });
-    }
-    if (proxyUrls.length >= MAX_PROXY_TRIES) break;
-  }
-
-  return proxyUrls;
+  args.push(...extraArgs);
+  return args;
 }
 
 function extractCleanErrorMessage(err) {
@@ -133,63 +85,16 @@ function extractCleanErrorMessage(err) {
   return err?.message || "Unknown error";
 }
 
-async function runYtDlpWithFastestProxy(url, extraArgs, options = {}) {
-  const freshProxies = await fetchFastestAliveProxies();
-  const candidates = [];
-  const seen = new Set();
-
-  if (options.preferredProxy?.url) {
-    candidates.push(options.preferredProxy);
-    seen.add(options.preferredProxy.url);
-  }
-
-  for (const proxy of freshProxies) {
-    if (!seen.has(proxy.url)) {
-      seen.add(proxy.url);
-      candidates.push(proxy);
+async function getVideoMetadata(url) {
+  const { stdout } = await execFileAsync(
+    YTDLP_BIN,
+    buildYtDlpArgs(["--dump-single-json", url]),
+    {
+      timeout: 60000,
+      maxBuffer: 25 * 1024 * 1024
     }
-  }
-
-  if (!candidates.length) {
-    throw new Error("No alive proxies returned by proxy API");
-  }
-
-  const failures = [];
-
-  for (const proxy of candidates) {
-    const args = [
-      "--no-warnings",
-      "--no-playlist",
-      "--no-check-certificates",
-      "--socket-timeout",
-      "15",
-      "--proxy",
-      proxy.url
-    ];
-    if (YTDLP_COOKIES) {
-      args.push("--cookies", YTDLP_COOKIES);
-    }
-    args.push(...extraArgs, url);
-
-    try {
-      const result = await execFileAsync(YTDLP_BIN, args, {
-        timeout: options.timeout || 25000,
-        maxBuffer: options.maxBuffer || 25 * 1024 * 1024
-      });
-      return {
-        ...result,
-        usedProxy: proxy
-      };
-    } catch (err) {
-      const reason = extractCleanErrorMessage(err);
-      console.warn(
-        `[GALAXY-MD] Proxy ${proxy.ip}:${proxy.port} (${Math.round(proxy.latencyMs)}ms) failed: ${reason}`
-      );
-      failures.push(`${proxy.ip}:${proxy.port} -> ${reason}`);
-    }
-  }
-
-  throw new Error(failures[failures.length - 1] || "All fast alive proxies failed in yt-dlp");
+  );
+  return JSON.parse(stdout);
 }
 
 function extractQualityChoices(info) {
@@ -230,7 +135,7 @@ function extractQualityChoices(info) {
 module.exports = {
   name: "ytv",
   aliases: [],
-  description: "Download YouTube video in selected quality using fastest alive proxy from API + yt-dlp",
+  description: "Download YouTube video in selected quality using yt-dlp and saved cookies",
   category: "Downloader",
 
   async execute({ sock, jid, message, text, args }) {
@@ -248,16 +153,11 @@ module.exports = {
     try {
       await sock.sendMessage(
         jid,
-        { text: "🔎 Fetching fastest alive proxy & video qualities..." },
+        { text: "🔎 Getting available video qualities..." },
         { quoted: message }
       );
 
-      const { stdout, usedProxy } = await runYtDlpWithFastestProxy(url, ["--dump-single-json"], {
-        timeout: 25000,
-        maxBuffer: 25 * 1024 * 1024
-      });
-
-      const info = JSON.parse(stdout);
+      const info = await getVideoMetadata(url);
       const choices = extractQualityChoices(info);
 
       if (!choices.length) {
@@ -272,7 +172,6 @@ module.exports = {
         url,
         title,
         downloads: choices,
-        preferredProxy: usedProxy,
         createdAt: Date.now()
       });
 
@@ -297,7 +196,7 @@ module.exports = {
       console.error("[GALAXY-MD] .ytv metadata error:", error);
       await sock.sendMessage(
         jid,
-        { text: "❌ Video quality list failed!\n" + (error?.message || "Unknown error") },
+        { text: "❌ Video quality list failed!\n" + extractCleanErrorMessage(error) },
         { quoted: message }
       );
     }
@@ -354,25 +253,25 @@ module.exports = {
     try {
       statusMessage = await sock.sendMessage(
         jid,
-        { text: "⬇️ Downloading " + selected.quality + " via fast proxy..." },
+        { text: "⬇️ Downloading " + selected.quality + "..." },
         { quoted: message }
       );
 
       const formatSelector =
         `bv*[height<=${selected.height}]+ba/b[height<=${selected.height}]/bv*+ba/b`;
 
-      await runYtDlpWithFastestProxy(
-        pending.url,
-        [
+      await execFileAsync(
+        YTDLP_BIN,
+        buildYtDlpArgs([
           "-f",
           formatSelector,
           "--merge-output-format",
           "mp4",
           "-o",
-          tempBase + ".%(ext)s"
-        ],
+          tempBase + ".%(ext)s",
+          pending.url
+        ]),
         {
-          preferredProxy: pending.preferredProxy,
           timeout: 300000,
           maxBuffer: 25 * 1024 * 1024
         }
@@ -423,7 +322,7 @@ module.exports = {
       await editStatus("✅ Video download complete!");
     } catch (error) {
       console.error("[GALAXY-MD] .ytv download error:", error);
-      await editStatus("❌ Video download failed!\n" + (error?.message || "Unknown error"));
+      await editStatus("❌ Video download failed!\n" + extractCleanErrorMessage(error));
     } finally {
       try {
         const dirFiles = fs.readdirSync(os.tmpdir());
