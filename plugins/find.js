@@ -8,7 +8,7 @@ const { promisify } = require("util");
 
 const run = promisify(execFile);
 const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
-const API_URL = process.env.MUSIC_FINDER_URL || "https://music-finder-q8hd.onrender.com/api/recognize";
+const API_URL = process.env.MUSIC_FINDER_URL || "https://music-finder-cp4u.onrender.com/api/recognize";
 const MAX_INPUT = 50 * 1024 * 1024;
 const SAMPLE_SECONDS = 15;
 const MEDIA_TYPES = ["audioMessage", "videoMessage", "documentMessage"];
