@@ -356,12 +356,9 @@ async function getGroupMetadata(inst, jid) {
 }
 
 function browserFor(Browsers) {
-  const wanted = String(process.env.WA_BROWSER || config.waBrowser || "safari").toLowerCase();
-  if (wanted === "android") return ["Android", "ANDROID_PHONE", "14.0.0"];
-  if (wanted === "chrome") {
-    return typeof Browsers?.ubuntu === "function" ? Browsers.ubuntu("Chrome") : ["Ubuntu", "Chrome", "22.04.4"];
-  }
-  return typeof Browsers?.macOS === "function" ? Browsers.macOS("Safari") : ["Mac OS", "Safari", config.version];
+  return typeof Browsers?.macOS === "function"
+    ? Browsers.macOS("Safari")
+    : ["Mac OS", "Safari", config.version];
 }
 
 async function handleCloneMode(inst, sock, jid, message, args, isPrivileged) {
@@ -554,7 +551,7 @@ async function startBot(inst) {
 
     sock.ev.on("creds.update", saveCreds);
 
-    // keep the admin-check cache honest
+    // keep the group metadata cache fresh
     sock.ev.on("groups.update", (updates) => {
       for (const item of updates || []) if (item?.id) inst.groupCache.delete(item.id);
     });
@@ -576,14 +573,6 @@ async function startBot(inst) {
         const item = type && group[type];
         if (!item?.message || item.enabled === false) return;
         const metadata = await getGroupMetadata(inst, update.id).catch(() => null);
-        if (!metadata) return;
-        const botNumber = digitsOf(cfg.botNumber);
-        const botIds = [sock.user?.id, sock.user?.lid, botNumber ? botNumber + "@s.whatsapp.net" : ""].filter(Boolean);
-        const botParticipant = (metadata.participants || []).find((p) => participantMatches(p, botIds));
-        if (!(botParticipant?.admin || botParticipant?.superadmin)) {
-          console.warn(`${tag} Skipping group welcome/goodbye: bot is not confirmed as a group admin.`);
-          return;
-        }
         for (const participant of update.participants || []) {
           const userJid = typeof participant === "string" ? participant : (participant.id || participant.jid || "");
           if (!userJid) continue;
@@ -591,9 +580,9 @@ async function startBot(inst) {
           const values = {
             "$mention": "@" + number,
             "$user": number,
-            "$group": String(metadata.subject || "this group").replace(/[\r\n]+/g, " "),
-            "$count": String(metadata.participants?.length || 0),
-            "$desc": String(metadata.desc || "No description").replace(/[\r\n]+/g, " "),
+            "$group": String(metadata?.subject || "this group").replace(/[\r\n]+/g, " "),
+            "$count": String(metadata?.participants?.length || 0),
+            "$desc": String(metadata?.desc || "No description").replace(/[\r\n]+/g, " "),
             "$date": new Date().toLocaleDateString(),
             "$time": new Date().toLocaleTimeString(),
           };
@@ -722,8 +711,7 @@ async function startBot(inst) {
 
           const text = getMessageText(message);
 
-          // Mention audio is passive and must work even when the bot is not a group admin.
-          // Run it before group metadata/admin checks so admin status cannot block this feature.
+          // Mention audio is passive and must work regardless of group admin status.
           if (jid.endsWith("@g.us") && !message.key?.fromMe && !text.startsWith(config.prefix)) {
             const mentionPlugin = plugins.find((plugin) =>
               plugin.name === "mention" && typeof plugin.handleMessage === "function"
@@ -743,36 +731,18 @@ async function startBot(inst) {
           if (jid.endsWith("@g.us") && !inst.isClone) {
             const feature = (name) => data.features?.[jid + ":" + name] === true;
             const senderIds = [message.key?.participant, message.key?.participantAlt].filter(Boolean);
-            const botNumber = digitsOf(cfg.botNumber);
-            const botIds = [
-              sock.user?.id,
-              sock.user?.lid,
-              botNumber ? botNumber + "@s.whatsapp.net" : "",
-            ].filter(Boolean);
-            const metadata = await getGroupMetadata(inst, jid).catch((error) => {
-              console.warn(`${tag} Could not fetch group metadata:`, error.message || error);
-              return null;
-            });
+            const metadata = await getGroupMetadata(inst, jid).catch(() => null);
             const participants = metadata?.participants || [];
             const participant = participants.find((p) => participantMatches(p, senderIds));
             const senderIsAdmin = !!(participant?.admin || participant?.superadmin);
-            const botParticipant = participants.find((p) => participantMatches(p, botIds));
-            const botIsAdmin = !!(botParticipant?.admin || botParticipant?.superadmin);
-            if (!botIsAdmin) {
-              // Do not block normal bot commands when the bot is not a group admin.
-              if (!inst.warnedGroups.has(jid)) {
-                inst.warnedGroups.add(jid);
-                console.warn(`${tag} Bot is not confirmed as a group admin in ${jid}; group-admin features are disabled there.`);
-              }
-            } else {
-              if (feature("welcome") && !message.key?.fromMe && message.messageStubType === 27) {
-                await sock.sendMessage(jid, { text: "👋 Welcome to the group!", mentions: [message.key?.participant, message.key?.participantAlt].filter(Boolean) }).catch(() => {});
-              }
-              if (feature("antilink") && !message.key?.fromMe && !senderIsAdmin && /(?:https?:\/\/|www\.|chat\.whatsapp\.com\/|t\.me\/)/i.test(text)) {
-                await sock.sendMessage(jid, { text: "⛔ Links are not allowed here. Removing the message." }).catch(() => {});
-                await sock.sendMessage(jid, { delete: message.key }).catch(() => {});
-                continue;
-              }
+
+            if (feature("welcome") && !message.key?.fromMe && message.messageStubType === 27) {
+              await sock.sendMessage(jid, { text: "👋 Welcome to the group!", mentions: [message.key?.participant, message.key?.participantAlt].filter(Boolean) }).catch(() => {});
+            }
+            if (feature("antilink") && !message.key?.fromMe && !senderIsAdmin && /(?:https?:\/\/|www\.|chat\.whatsapp\.com\/|t\.me\/)/i.test(text)) {
+              await sock.sendMessage(jid, { text: "⛔ Links are not allowed here. Removing the message." }).catch(() => {});
+              await sock.sendMessage(jid, { delete: message.key }).catch(() => {});
+              continue;
             }
           }
 
