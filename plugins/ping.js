@@ -12,12 +12,21 @@ module.exports = {
       { quoted: message }
     );
     const ms = Math.max(0, Date.now() - start);
+    const finalText = `*Speed* *${ms}* *ms*`;
 
     if (sent?.key?.id) {
-      await sock.sendMessage(jid, {
-        text: `*Latency* *${ms}* *ms*`,
-        edit: sent.key,
-      });
+      try {
+        await sock.sendMessage(jid, {
+          text: finalText,
+          edit: sent.key,
+        });
+      } catch {
+        await sock.sendMessage(
+          jid,
+          { text: finalText },
+          { quoted: message }
+        );
+      }
     }
   },
 };
