@@ -872,7 +872,7 @@ process.on("uncaughtException", (error) => console.error("[GALAXY-MD] Uncaught e
 
 console.log([
   "╔══════════════════════════════╗",
-  "║        GALAXY-MD v2.0.0      ║",
+  "║        GALAXY-MD v3.7.0      ║",
   "║    CommonJS • Baileys 7 RC14 ║",
   "╚══════════════════════════════╝",
 ].join("\n"));
