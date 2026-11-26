@@ -14,9 +14,9 @@ function readData() {
 function readVersion() {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
-    return String(pkg.version || "2.0.0");
+    return String(pkg.version || "3.7.0");
   } catch {
-    return "2.0.0";
+    return "3.7.0";
   }
 }
 
