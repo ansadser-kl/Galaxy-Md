@@ -1,6 +1,15 @@
 node_modules/
-session/
 .env
+
+# WhatsApp logins: main session and clone sessions (session2, session3 ...)
+session/
+session*/
+call-session/
+
+# runtime data and secrets
+data/
+temp/
+yt-auth.json
 mode.json
 galaxy-data.json
 *.log
