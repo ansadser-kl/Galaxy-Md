@@ -2,7 +2,6 @@
 
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
 
 function readData() {
   try {
@@ -12,97 +11,127 @@ function readData() {
   }
 }
 
-function bytesToSize(bytes) {
-  if (!Number.isFinite(bytes) || bytes < 0) return "N/A";
-  if (bytes < 1024) return bytes + " B";
-  const units = ["KB", "MB", "GB", "TB"];
-  let size = bytes / 1024;
-  let i = 0;
-  while (size >= 1024 && i < units.length - 1) {
-    size /= 1024;
-    i++;
+function readVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
+    return String(pkg.version || "2.0.0");
+  } catch {
+    return "2.0.0";
   }
-  return size.toFixed(1) + " " + units[i];
 }
 
-function commandName(plugin) {
+function commandNames(plugin) {
   const names = [plugin.name, ...(Array.isArray(plugin.aliases) ? plugin.aliases : [])];
-  return [...new Set(names.map((name) => String(name || "").trim()).filter(Boolean))];
+  return [...new Set(names.map((n) => String(n || "").trim()).filter(Boolean))];
 }
 
 module.exports = {
   name: "menu",
   aliases: ["help", "commands"],
-  description: "Shows the Galaxy-MD command menu with an image.",
-  async execute({ sock, jid, message, config, plugins }) {
-    const data = readData();
-    const prefix = String(data.prefix || config.prefix || ".");
-    const botName = String(data.botName || config.botName || "GALAXY-MD");
-    const botOwner = String(data.ownerNumber || config.ownerNumber || "N/A");
-    const mode = String(config.mode || "public").toUpperCase();
-    const used = bytesToSize(os.totalmem() - os.freemem());
-    const total = bytesToSize(os.totalmem());
-    const version = String(config.version || "1.0.0");
-    const sender = String(message.pushName || message.senderName || "User")
-      .replace(/[\\r\n]+/g, "").slice(0, 60);
+  description: "Displays the bot menu with commands categorized by type.",
 
-    // Commands hidden from the menu at the user's request.
+  async execute({ sock, jid, message, config: runtimeConfig, plugins }) {
+    const cfg = runtimeConfig || require("../config") || {};
+    const data = readData();
+
+    const prefix = String(data.prefix || cfg.prefix || cfg.PREFIX || ".");
+    const botName = String(data.botName || cfg.botName || cfg.BOT_NAME || "GALAXY-MD");
+    const ownerName = String(data.ownerName || cfg.ownerName || cfg.OWNER_NAME || cfg.ownerNumber || "ANSAD SER");
+    const mode = String(cfg.mode || "public").toUpperCase();
+    const version = String(cfg.version || cfg.VERSION || readVersion());
+    const readMore = String.fromCharCode(8206).repeat(4001);
+
+    // Commands hidden from the menu
     const hiddenCommands = new Set([
       "antiviewonce", "autoreply", "creator", "getmd", "delcmd",
       "everyone", "groupinfo", "resetsession", "setcmd", "s", "st",
       "viewonce", "wt"
     ]);
-    const normalizeCommand = (name) => String(name || "")
-      .toLowerCase()
-      .replace(/[\\s_-]+/g, "");
+    const normalizeCommand = (name) =>
+      String(name || "")
+        .toLowerCase()
+        .replace(/[\s_-]+/g, "");
 
-    const groups = new Map();
+    const cmnd = [];
+    const categorySet = new Set();
+
     for (const plugin of plugins || []) {
-      const category = String(plugin.category || plugin.use || "General");
-      const names = commandName(plugin).filter(
+      if (plugin.dontAddCommandList) continue;
+      const type = String(plugin.category || plugin.type || plugin.use || "misc")
+        .trim()
+        .toLowerCase() || "misc";
+
+      const visibleNames = commandNames(plugin).filter(
         (name) => !hiddenCommands.has(normalizeCommand(name))
       );
-      if (!names.length) continue;
-      if (!groups.has(category)) groups.set(category, []);
-      groups.get(category).push(...names);
-    }
 
-    let index = 0;
-    let commandText = "";
-    for (const [category, names] of groups) {
-      const uniqueNames = [...new Set(names)].sort((a, b) => a.localeCompare(b));
-      commandText += "\n\n╭─『 *" + category.toUpperCase() + "* 』\n";
-      for (const name of uniqueNames) {
-        index++;
-        commandText += "│ " + " " + prefix + name + "\n";
+      for (const cmd of visibleNames) {
+        cmnd.push({ cmd, type });
+        categorySet.add(type);
       }
-      commandText += "╰────────────────";
     }
 
-    const caption = [
-      "╭━━━〔  *" + botName + "* 〕━━━╮",
-      "│",
-      "│  ✧ *BOT DASHBOARD*",
-      "│  ├─  User: " + sender,
-      "│  ├─  Owner: " + botOwner,
-      "│  ├─  Mode: " + mode,
-      "│  ├─  Host: " + os.platform(),
-      "│  ├─  RAM: " + used + " / " + total,
-      "│  ├─  Version: " + version,
-      "│  └─  Commands: " + index,
-      "│",
-      "╰━━〔 *COMMAND CENTER* 〕━━╯",
-      commandText || "\nNo commands found.",
-      
-      
-    ].join("\n");
+    cmnd.sort((a, b) => a.cmd.localeCompare(b.cmd));
+    const categories = [...categorySet].sort((a, b) => a.localeCompare(b));
 
-    const imageUrl = "https://i.ibb.co/B5t1nd97/temp.jpg";
+    let menu = `\n╭━━━〔 ${botName} 〕━━━┈
+  ╭──────────────
+  ❖ │  *OWNER*: ${ownerName}
+  ❖ │  *COMMANDS*: ${cmnd.length}
+  ❖ │  *MODE*: ${mode}
+  ❖ │  *PREFIX*: ${prefix}
+  ❖ │  *VERSION*: ${version}
+  ╰──────────────
+  ╰━━━━━━━━━━━━━━━┈\n ${readMore}`;
+
+    for (const cmmd of categories) {
+      menu += `\n ╭─────────────────────┈⚆`;
+      menu += `\n  │ 「 *${cmmd.toUpperCase()}* 」`;
+      menu += `\n ╰┬────────────────────┈⚆`;
+      menu += `\n ╭┴────────────────────┈⚆`;
+
+      const comad = cmnd.filter((item) => item.type === cmmd);
+      for (const item of comad) {
+        menu += `\n❆  ${prefix}${item.cmd.trim()}`;
+      }
+
+      menu += `\n ╰─────────────────────┈⚆`;
+    }
+
+    menu += `\n\n${botName}`;
+
+    const mediaUrl = String(
+      process.env.MENU_URL || cfg.MENU_URL || cfg.menuUrl || "https://galaxy-md-w3vr.onrender.com/dl/aseycE24EVyt"
+    ).trim();
+
     try {
-      await sock.sendMessage(jid, { image: { url: imageUrl }, caption }, { quoted: message });
+      const res = await fetch(mediaUrl, {
+        headers: { "User-Agent": "Mozilla/5.0", Accept: "image/*,video/*,*/*" },
+        redirect: "follow",
+        signal: AbortSignal.timeout(30000)
+      });
+      if (!res.ok) throw new Error("Media HTTP " + res.status);
+
+      const contentType = String(res.headers.get("content-type") || "").toLowerCase();
+      const buffer = Buffer.from(await res.arrayBuffer());
+      if (!buffer.length) throw new Error("Empty media buffer");
+
+      if (contentType.startsWith("video/")) {
+        await sock.sendMessage(
+          jid,
+          { video: buffer, gifPlayback: true, caption: menu },
+          { quoted: message }
+        );
+      } else {
+        await sock.sendMessage(
+          jid,
+          { image: buffer, caption: menu },
+          { quoted: message }
+        );
+      }
     } catch (error) {
-      console.error("[GALAXY-MD] Menu image send failed:", error.message || error);
-      await sock.sendMessage(jid, { text: caption }, { quoted: message });
+      console.error("[GALAXY-MD] Menu media send failed:", error?.message || error);
+      await sock.sendMessage(jid, { text: menu }, { quoted: message });
     }
   }
 };
