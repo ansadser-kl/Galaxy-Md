@@ -1,78 +1,84 @@
 "use strict";
 
-const runtime = require("../lib/runtime");
+// .pair <number>        link another WhatsApp number as a bot (clone)
+// .pair list            show linked clones          (owner / SUDO)
+// .pair remove <number> unlink a clone              (owner / SUDO)
+//
+// PAIR_OWNER_ONLY=true  lets only the owner / SUDO use .pair <number>
+// MAX_CLONES=4          how many numbers can be linked at once (0 turns the feature off)
+
+const OWNER_ONLY = String(process.env.PAIR_OWNER_ONLY || "").toLowerCase() === "true";
+
+function formatCode(code) {
+  const clean = String(code || "").replace(/[^A-Za-z0-9]/g, "");
+  return clean.length === 8 ? clean.slice(0, 4) + "-" + clean.slice(4) : String(code);
+}
 
 module.exports = {
   name: "pair",
-  aliases: ["clone", "unpair", "delsession", "sessions", "clones", "session"],
-  category: "Owner",
-  description: "Clone the bot to more WhatsApp numbers (owner / SUDO only)",
-  async execute({ sock, jid, message, query, command, isPrivileged }) {
-    const reply = (text, extra = {}) => sock.sendMessage(jid, { text, ...extra }, { quoted: message });
-    if (!isPrivileged) return reply("⛔ Owner/SUDO only.");
+  aliases: ["clone"],
+  description: "Link another WhatsApp number as a bot (clone)",
+  category: "Utility",
 
-    const limits = typeof runtime.getLimits === "function"
-      ? runtime.getLimits()
-      : { max: 4, used: 1 };
+  async execute({ sock, jid, message, args, config, isPrivileged, manager }) {
+    const reply = (text) => sock.sendMessage(jid, { text }, { quoted: message });
+    const prefix = config.prefix || ".";
 
-    if (["sessions", "clones", "session"].includes(command)) {
-      const sessions = typeof runtime.listSessions === "function" ? runtime.listSessions() : [];
-      const lines = sessions.map((item) =>
-        (item.slot === 1 ? "🟢 MAIN" : "🔵 CLONE-" + item.slot) +
-        " | " + (item.number || "unknown") + " | " + (item.status || "offline")
-      );
+    if (config.isClone) return reply("⛔ A clone bot cannot link other numbers.");
+    if (!manager) return reply("❌ The clone system is not available.");
+
+    const sub = String(args?.[0] || "").toLowerCase();
+
+    if (sub === "list") {
+      if (!isPrivileged) return reply("⛔ Owner/SUDO only.");
+      const items = manager.list();
+      if (!items.length) return reply(`👥 No clones linked (0/${manager.max}).`);
       return reply(
-        `🤖 *Active sessions* (${sessions.length}/${limits.max})\n` +
-        (lines.join("\n") || "None") +
-        "\n\n.pair <number> • .unpair <number|slot|all>"
+        `👥 *Clone bots* (${items.length}/${manager.max})\n\n` +
+        items.map((item) => `${item.slot - 1}. ${item.number} ${item.live ? "🟢 live" : "🟡 connecting"}`).join("\n") +
+        `\n\nRemove one: ${prefix}pair remove <number>`
       );
     }
 
-    if (["unpair", "delsession"].includes(command)) {
-      const target = String(query || "").trim();
-      if (!target) return reply("Usage: .unpair <number|slot|all>");
-      if (typeof runtime.stopClone !== "function") return reply("Session manager is not ready yet.");
-      const result = await runtime.stopClone(target);
-      if (!result?.removed?.length) return reply("No paired session matched that value.");
-      return reply("✅ Unpaired and deleted:\n" + result.removed.map((item) =>
-        `CLONE-${item.slot} | ${item.number || "unknown"}`
-      ).join("\n"));
+    if (sub === "remove" || sub === "delete") {
+      if (!isPrivileged) return reply("⛔ Owner/SUDO only.");
+      const removed = await manager.remove(args.slice(1).join(""));
+      return reply(removed ? "✅ Clone removed and its session deleted." : "❌ No clone found with that number.");
     }
 
-    const number = String(query || "").replace(/\D/g, "");
-    if (number.length < 8 || number.length > 15) {
-      return reply("Usage: .pair <number with country code>\nExample: .pair 919876543210");
-    }
-    if (typeof runtime.startClone !== "function") return reply("Session manager is not ready yet.");
+    if (OWNER_ONLY && !isPrivileged) return reply("⛔ Only the owner can link numbers.");
 
-    const wait = await reply("⏳ Creating CLONE session and requesting a pairing code for " + number + " ...").catch(() => null);
-    const result = await runtime.startClone(number);
-
-    if (!result?.ok) return reply("❌ " + (result?.reason || "Could not create the session."));
-
-    if (result.alreadyLinked) {
-      return reply(`✅ CLONE-${result.slot} restored from its saved session and is connecting now.`);
+    const digits = String(args.join("")).replace(/\D/g, "");
+    if (!digits) {
+      return reply(
+        "*Pair a number*\n\n" +
+        `Usage: ${prefix}pair 919876543210\n` +
+        "(country code + number, no +)\n\n" +
+        `Slots used: ${manager.count()}/${manager.max}`
+      );
     }
 
-    const text = [
-      `✅ *CLONE-${result.slot} created*`,
-      "Number: " + result.number,
-      `Slot: ${result.slot}/${limits.max}`,
-      "",
-      "*Pairing code:* " + result.code,
-      "",
-      "On the " + result.number + " phone:",
-      "WhatsApp → Linked devices → Link with phone number → enter this code.",
-      "",
-      "The clone works only while its session is live. Logging out from WhatsApp deletes that session folder automatically.",
-    ].join("\n");
+    const requester = String(message.key?.participant || message.key?.participantAlt || message.key?.remoteJid || jid);
 
-    if (wait?.key) {
-      try {
-        await sock.sendMessage(jid, { text, edit: wait.key }, { quoted: message });
-        return;
-      } catch {}
+    try {
+      await reply("⏳ Creating pairing code...");
+      const result = await manager.pair(digits, {
+        requester,
+        bypassCooldown: isPrivileged,
+        onConnected: () =>
+          sock.sendMessage(jid, { text: `✅ *${digits}* is connected. The bot now runs on that number too.\nSend ${prefix}menu from it.` }, { quoted: message }),
+      });
+      return reply(
+        "🔗 *PAIRING CODE*\n\n" +
+        "`" + formatCode(result.code) + "`\n\n" +
+        "📲 WhatsApp → Linked devices → Link with phone number → enter this code.\n" +
+        `⏳ Enter it within ${Math.round(result.waitSeconds / 60)} minutes.\n` +
+        `👥 Slots: ${result.used}/${result.max}\n\n` +
+        "If you log out from the phone, this bot is removed automatically."
+      );
+    } catch (error) {
+      if (!error.user) console.error("[GALAXY-MD] .pair error:", error.message || error);
+      return reply("❌ " + (error.user ? error.message : "Could not create a pairing code. Try again later."));
     }
-    return reply(text);
   },
 };
