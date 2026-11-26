@@ -5,6 +5,6 @@ module.exports = {
   description: "Show the GALAXY-MD source repository",
   category: "Utility",
   async execute({ sock, jid, message }) {
-    await sock.sendMessage(jid, { text: "🌌 *GALAXY-MD Repository*\nhttps://github.com/ansadser-kl/Galaxy-Md" }, { quoted: message });
+    await sock.sendMessage(jid, { text: "*GALAXY-MD Repository*\https://github.com/ansadser-kl/Galaxy-Md" }, { quoted: message });
   }
 };
