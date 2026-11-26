@@ -3,12 +3,12 @@
 const { spawn } = require("node:child_process");
 
 const AUDIOS = [
-  "https://ansadkl-file.onrender.com/dl/OIoqoSULg7lw",
-  "https://ansadkl-file.onrender.com/dl/ZHj3x8fj4PmH",
+  "https://galaxy-md-w3vr.onrender.com/dl/DW4pIqciE3Cw",
+  "https://galaxy-md-w3vr.onrender.com/dl/dveTkW5xOkEh",
 ];
 
 const IMAGES = [
-  "https://ansadkl-file.onrender.com/dl/uJ-qp2b_0vOe",
+  "https://galaxy-md-w3vr.onrender.com/dl/mOoMeddQAGuT",
 ];
 
 const TITLE = "GALAXY-MD";
