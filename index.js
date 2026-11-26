@@ -7,14 +7,42 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const pino = require("pino");
 const config = require("./config");
+const store = require("./lib/session-store");
+const runtime = require("./lib/runtime");
 
-const SESSION_DIR = process.env.SESSION_DIR ? path.resolve(process.env.SESSION_DIR) : path.join(__dirname, "session");
+const SESSION_DIR = store.BASE_DIR;
 const PLUGINS_DIR = path.join(__dirname, "plugins");
-let reconnectTimer = null;
-let starting = false;
 let cachedPlugins = [];
 let cachedPluginSignature = "";
 let latestVersionCache = null;
+let baileysCache = null;
+
+// One entry per live WhatsApp account. Slot 1 is the main bot, slots 2..N are clones.
+const live = new Map();
+let shuttingDown = false;
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function sessionLabel(session) {
+  return session.slot === 1 ? "MAIN" : "CLONE-" + session.slot;
+}
+
+function sessionNumber(session) {
+  return session.slot === 1
+    ? store.sanitizeNumber(config.botNumber)
+    : store.sanitizeNumber(session.number);
+}
 
 function unwrapMessage(message) {
   let current = message || {};
@@ -45,7 +73,7 @@ function getQuotedMessage(message, jid) {
 }
 
 function isVoiceNoteRequest(text) {
-  return /(?:voice\s*note|voice\s*message|\bptt\b|\bvn\b|voice\s*note\s*aakk|voice\s*note\s*akk|vn\s*aakk|vn\s*akk|വോയ്സ്\s*നോട്ട്|വോയിസ്\s*നോട്ട്|വോയ്സ്\s*മെസേജ്|വോയിസ്\s*മെസേജ്)/i.test(String(text || ""));
+  return /(?:voice\s*note|voice\s*message|\bptt\b|\bvn\b|voice\s*note\s*aakk|voice\s*note\s*akk|vn\s*aakk|vn\s*akk|വോയ്സ്\s*നോട്ട്|വോയിസ്\s*നോട്ട്|വോയ്സ്\s*മെസേജ്|വോയ്സ്\s*മെസേജ്)/i.test(String(text || ""));
 }
 
 function getAudioMedia(message) {
@@ -210,58 +238,158 @@ function loadPlugins() {
   return cachedPlugins;
 }
 
-async function startBot() {
-  if (starting) return;
-  starting = true;
+async function loadBaileys() {
+  if (baileysCache) return baileysCache;
+  const baileys = await import("baileys");
+  const makeWASocket = baileys.default || baileys.makeWASocket;
+  if (typeof makeWASocket !== "function" || typeof baileys.useMultiFileAuthState !== "function") {
+    throw new Error("Required Baileys exports are missing. Check the installed Baileys version.");
+  }
+  baileysCache = {
+    makeWASocket,
+    Browsers: baileys.Browsers,
+    useMultiFileAuthState: baileys.useMultiFileAuthState,
+    fetchLatestBaileysVersion: baileys.fetchLatestBaileysVersion,
+    downloadMediaMessage: baileys.downloadMediaMessage,
+    DisconnectReason: baileys.DisconnectReason || {},
+  };
+  return baileysCache;
+}
+
+async function getVersion(lib) {
+  if (latestVersionCache) return latestVersionCache;
+  if (typeof lib.fetchLatestBaileysVersion !== "function") return null;
+  try {
+    const latest = await lib.fetchLatestBaileysVersion();
+    if (latest?.version) latestVersionCache = latest.version;
+  } catch {
+    console.warn("[GALAXY-MD] Could not fetch WhatsApp version; using library defaults.");
+  }
+  return latestVersionCache;
+}
+
+function extractPairingCode(result) {
+  if (typeof result === "string") return result.trim().toUpperCase();
+  const code = result?.code || result?.pairingCode || result?.pairing_code;
+  return code ? String(code).trim().toUpperCase() : "";
+}
+
+async function requestPairingCode(sock, number, isStopped) {
+  let lastError;
+  // Baileys needs the socket to be ready before a code can be requested.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await delay(attempt === 0 ? 2000 : 1200);
+    if (isStopped?.()) throw new Error("Session stopped while waiting for a pairing code.");
+    try {
+      const code = extractPairingCode(await sock.requestPairingCode(number));
+      if (code) return code;
+      lastError = new Error("Baileys returned an empty pairing code.");
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Could not request a pairing code.");
+}
+
+function printPairingCode(label, number, code) {
+  console.log("\n╔══════════════════════════════╗");
+  console.log(`║  GALAXY-MD PAIR CODE (${label.padEnd(8)}) ║`);
+  console.log("╚══════════════════════════════╝");
+  console.log("Number:", number);
+  console.log("PAIRING CODE:", code);
+  console.log("WhatsApp → Linked devices → Link with phone number.\n");
+}
+
+async function stopSlot(slot) {
+  const entry = live.get(slot);
+  if (!entry) return;
+  entry.stopped = true;
+  if (entry.reconnectTimer) {
+    clearTimeout(entry.reconnectTimer);
+    entry.reconnectTimer = null;
+  }
+  try { entry.sock?.end?.(new Error("Session stopped")); } catch {}
+  live.delete(slot);
+}
+
+async function handleLoggedOut(session, entry) {
+  const slot = session.slot;
+  const label = sessionLabel(session);
+  entry.stopped = true;
+  if (entry.reconnectTimer) {
+    clearTimeout(entry.reconnectTimer);
+    entry.reconnectTimer = null;
+  }
+  live.delete(slot);
+
+  // WhatsApp logged this account out: drop the stored credentials and free the slot.
+  store.removeClone({ slot });
+  store.removeSessionDir(slot);
+  entry.rejectCode(new Error("This session was logged out from WhatsApp before it could be paired."));
+  console.log(`[GALAXY-MD] ${label} was logged out from WhatsApp. Session folder deleted; slot ${slot} is free.`);
+
+  if (slot === 1 && !shuttingDown) {
+    // The main bot can come back with a fresh pairing code.
+    setTimeout(() => {
+      startSession({ slot: 1, number: sessionNumber({ slot: 1 }), dir: store.sessionDir(1), isPrimary: true })
+        .catch((error) => console.error("[GALAXY-MD] Main session restart error:", error));
+    }, 1500);
+  }
+}
+
+async function startSession(session) {
+  const existing = live.get(session.slot);
+  if (existing?.starting) return existing;
+  if (existing) await stopSlot(session.slot);
+
+  const label = sessionLabel(session);
+  const entry = {
+    slot: session.slot,
+    session,
+    sock: null,
+    status: "starting",
+    starting: true,
+    stopped: false,
+    reconnectTimer: null,
+    code: "",
+    startedAt: Date.now(),
+  };
+  entry.codePromise = new Promise((resolve, reject) => {
+    entry.resolveCode = resolve;
+    entry.rejectCode = reject;
+  });
+  // Avoid an unhandled rejection when nobody awaits the code (main session / auto-start).
+  entry.codePromise.catch(() => {});
+  live.set(session.slot, entry);
 
   try {
-    const baileys = await import("baileys");
-    const makeWASocket = baileys.default || baileys.makeWASocket;
-    const Browsers = baileys.Browsers;
-    const useMultiFileAuthState = baileys.useMultiFileAuthState;
-    const fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
-    const downloadMediaMessage = baileys.downloadMediaMessage;
-    const DisconnectReason = baileys.DisconnectReason || {};
+    const lib = await loadBaileys();
+    fs.mkdirSync(session.dir, { recursive: true });
+    const { state, saveCreds } = await lib.useMultiFileAuthState(session.dir);
+    const version = await getVersion(lib);
 
-    if (typeof makeWASocket !== "function" || typeof useMultiFileAuthState !== "function") {
-      throw new Error("Required Baileys exports are missing. Check the installed Baileys version.");
-    }
-
-    fs.mkdirSync(SESSION_DIR, { recursive: true });
-    const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
-
-    if (!state.creds.registered && !config.botNumber) {
-      console.error("[GALAXY-MD] BOT_NUMBER is missing. Add BOT_NUMBER=countrycode+number to your .env file.");
-      starting = false;
-      return;
-    }
-
-    let version = latestVersionCache;
-    if (!version && typeof fetchLatestBaileysVersion === "function") {
-      try {
-        const latest = await fetchLatestBaileysVersion();
-        version = latest && latest.version;
-        if (version) latestVersionCache = version;
-      } catch {
-        console.warn("[GALAXY-MD] Could not fetch WhatsApp version; using library defaults.");
-      }
-    }
-
-    const sock = makeWASocket({
+    const sock = lib.makeWASocket({
       ...(version ? { version } : {}),
       auth: state,
       logger: pino({ level: "silent" }),
       printQRInTerminal: false,
-      browser: String(process.env.WA_BROWSER || "").toLowerCase() === "android" ? ["Android", "ANDROID_PHONE", "14.0.0"] : (typeof Browsers?.macOS === "function" ? Browsers.macOS("Safari") : ["Mac OS", "Safari", config.version]),
+      browser: String(process.env.WA_BROWSER || "").toLowerCase() === "android"
+        ? ["Android", "ANDROID_PHONE", "14.0.0"]
+        : (typeof lib.Browsers?.macOS === "function"
+          ? lib.Browsers.macOS("Safari")
+          : ["Mac OS", "Safari", config.version]),
       markOnlineOnConnect: false,
       syncFullHistory: false,
     });
+    entry.sock = sock;
+    entry.status = "connecting";
 
     sock.ev.on("creds.update", saveCreds);
 
     // Send configured welcome/goodbye messages when group participants change.
     sock.ev.on("group-participants.update", async (update) => {
       try {
+        if (entry.stopped) return;
         const dataFile = path.join(__dirname, "galaxy-data.json");
         let data = {};
         try { data = JSON.parse(fs.readFileSync(dataFile, "utf8")); } catch {}
@@ -274,11 +402,11 @@ async function startBot() {
         if (!item?.message || item.enabled === false) return;
         const metadata = await sock.groupMetadata(update.id).catch(() => null);
         if (!metadata) return;
-        const botNumber = String(config.botNumber || "").replace(/\D/g, "");
+        const botNumber = String(sessionNumber(session) || config.botNumber || "").replace(/\D/g, "");
         const botIds = [sock.user?.id, sock.user?.lid, botNumber ? botNumber + "@s.whatsapp.net" : ""].filter(Boolean);
         const botParticipant = (metadata.participants || []).find((p) => participantMatches(p, botIds));
         if (!(botParticipant?.admin || botParticipant?.superadmin)) {
-          console.warn("[GALAXY-MD] Skipping group welcome/goodbye: bot is not confirmed as a group admin.");
+          console.warn(`[GALAXY-MD] ${label}: skipping group welcome/goodbye: bot is not confirmed as a group admin.`);
           return;
         }
         for (const participant of update.participants || []) {
@@ -316,71 +444,104 @@ async function startBot() {
           }
         }
       } catch (error) {
-        console.error("[GALAXY-MD] Welcome/goodbye event error:", error.message || error);
+        console.error(`[GALAXY-MD] ${label} welcome/goodbye event error:`, error.message || error);
       }
     });
 
     sock.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect } = update;
+      if (entry.stopped) return;
 
       if (connection === "connecting") {
-        console.log("[GALAXY-MD] Connecting to WhatsApp using saved session when available...");
+        entry.status = "connecting";
+        console.log(`[GALAXY-MD] ${label}: connecting to WhatsApp using saved session when available...`);
       }
 
       if (connection === "open") {
-        console.log(`[GALAXY-MD] ${config.botName} connected successfully! 🚀`);
+        entry.status = "open";
+        console.log(`[GALAXY-MD] ${label} (${sock.user?.id || session.number || "unknown"}) connected successfully! 🚀`);
+
+        // Fill in a missing registry number (restored folder without metadata).
+        if (session.slot !== 1 && !session.number && sock.user?.id) {
+          session.number = store.sanitizeNumber(sock.user.id);
+          const reg = store.readRegistry();
+          const clone = reg.clones.find((item) => item.slot === session.slot);
+          if (clone && !clone.number) {
+            clone.number = session.number;
+            store.writeRegistry(reg);
+          }
+        }
       }
 
       if (connection === "close") {
+        entry.status = "closed";
         const statusCode = lastDisconnect?.error?.output?.statusCode;
-        const loggedOut = statusCode === DisconnectReason.loggedOut;
+        const loggedOutReason = lib.DisconnectReason?.loggedOut;
+        const errorText = lastDisconnect?.error?.message || "Unknown error";
+        const loggedOut = (Number.isFinite(loggedOutReason) && statusCode === loggedOutReason) ||
+          statusCode === 401 || /logged ?out/i.test(errorText);
 
         console.log(
-          "[GALAXY-MD] Connection closed.",
+          `[GALAXY-MD] ${label}: connection closed.`,
           "Status:", statusCode ?? "unknown",
-          "| Error:", lastDisconnect?.error?.message || "Unknown error",
+          "| Error:", errorText,
           "| Detail:", lastDisconnect?.error?.output?.payload?.message || "No extra detail"
         );
 
-        starting = false;
-        if (!loggedOut && !reconnectTimer) {
-          reconnectTimer = setTimeout(() => {
-            reconnectTimer = null;
-            startBot().catch((error) => console.error("[GALAXY-MD] Restart error:", error));
+        if (loggedOut) {
+          await handleLoggedOut(session, entry);
+          return;
+        }
+
+        if (!entry.stopped && !entry.reconnectTimer) {
+          entry.reconnectTimer = setTimeout(() => {
+            entry.reconnectTimer = null;
+            startSession(session).catch((error) =>
+              console.error(`[GALAXY-MD] ${label} restart error:`, error)
+            );
           }, 3000);
         }
       }
     });
 
     if (!state.creds.registered) {
-      const number = String(config.botNumber).replace(/\D/g, "");
-      if (number.length >= 8) {
-        setTimeout(async () => {
+      const number = sessionNumber(session);
+      if (store.isValidNumber(number)) {
+        // Request the code in the background; callers of startSession can await entry.codePromise.
+        (async () => {
           try {
-            const code = await sock.requestPairingCode(number);
-            console.log("\n╔══════════════════════════════╗");
-            console.log("║     GALAXY-MD PAIR CODE      ║");
-            console.log("╚══════════════════════════════╝");
-            console.log("\nPAIRING CODE:", code);
-            console.log("WhatsApp → Linked devices → Link with phone number.\n");
+            const code = await requestPairingCode(sock, number, () => entry.stopped);
+            if (entry.stopped) { entry.resolveCode(null); return; }
+            entry.code = code;
+            printPairingCode(label, number, code);
+            entry.resolveCode(code);
           } catch (error) {
-            console.error("[GALAXY-MD] Pairing code request failed:", error.message || error);
+            console.error(`[GALAXY-MD] ${label}: pairing code request failed:`, error.message || error);
+            entry.rejectCode(error);
           }
-        }, 2000);
+        })();
       } else {
-        console.error("[GALAXY-MD] BOT_NUMBER looks invalid. Include country code and digits only, e.g. 919876543210.");
-        starting = false;
+        const reason = session.slot === 1
+          ? "BOT_NUMBER looks invalid. Include country code and digits only, e.g. 919876543210."
+          : "Clone number looks invalid. Include country code and digits only.";
+        console.error("[GALAXY-MD] " + label + ": " + reason);
+        entry.status = "error";
+        entry.rejectCode(new Error(reason));
       }
+    } else {
+      entry.resolveCode(null);
     }
 
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
       if (type !== "notify") return;
 
       const plugins = loadPlugins();
+      const currentNumber = sessionNumber(session);
 
       for (const message of messages || []) {
         const receivedAt = Date.now();
         try {
+          if (entry.stopped) return;
           if (!message?.message) continue;
           const jid = message.key?.remoteJid;
           if (!jid || jid === "status@broadcast") continue;
@@ -395,7 +556,7 @@ async function startBot() {
             );
             if (mentionPlugin) {
               const mentionHandled = await mentionPlugin.handleMessage({
-                sock, jid, message, text, config, plugins,
+                sock, jid, message, text, config, plugins, session,
               });
               if (mentionHandled) continue;
             }
@@ -411,14 +572,14 @@ async function startBot() {
           if (jid.endsWith("@g.us")) {
             const feature = (name) => data.features?.[jid + ":" + name] === true;
             const senderIds = [message.key?.participant, message.key?.participantAlt].filter(Boolean);
-            const botNumber = String(config.botNumber || "").replace(/\D/g, "");
+            const botNumber = String(currentNumber || config.botNumber || "").replace(/\D/g, "");
             const botIds = [
               sock.user?.id,
               sock.user?.lid,
               botNumber ? botNumber + "@s.whatsapp.net" : "",
             ].filter(Boolean);
             const metadata = await sock.groupMetadata(jid).catch((error) => {
-              console.warn("[GALAXY-MD] Could not fetch group metadata:", error.message || error);
+              console.warn(`[GALAXY-MD] ${label}: could not fetch group metadata:`, error.message || error);
               return null;
             });
             const participants = metadata?.participants || [];
@@ -429,7 +590,7 @@ async function startBot() {
             if (!botIsAdmin) {
               // Do not block normal bot commands when the bot is not a group admin.
               // The AI handler independently refuses group AI unless botIsAdmin is true.
-              console.warn("[GALAXY-MD] Bot is not confirmed as a group admin; group-admin features and group AI are disabled.");
+              console.warn(`[GALAXY-MD] ${label}: bot is not confirmed as a group admin; group-admin features and group AI are disabled.`);
             } else {
               if (feature("welcome") && !message.key?.fromMe && message.messageStubType === 27) {
                 await sock.sendMessage(jid, { text: "👋 Welcome to the group!", mentions: [message.key?.participant, message.key?.participantAlt].filter(Boolean) }).catch(() => {});
@@ -444,14 +605,14 @@ async function startBot() {
 
           if (!text.startsWith(config.prefix)) {
             const convertedToPtt = await convertQuotedAudioToPtt({
-              sock, jid, message, text, downloadMediaMessage,
+              sock, jid, message, text, downloadMediaMessage: lib.downloadMediaMessage,
             });
             if (convertedToPtt) continue;
 
             let replyHandled = false;
             for (const plugin of plugins) {
               if (typeof plugin.handleReply !== "function") continue;
-              const handled = await plugin.handleReply({ sock, jid, message, text, config, plugins });
+              const handled = await plugin.handleReply({ sock, jid, message, text, config, plugins, session });
               if (handled) {
                 replyHandled = true;
                 break;
@@ -463,7 +624,7 @@ async function startBot() {
             let passivePluginHandled = false;
             for (const plugin of plugins) {
               if (typeof plugin.handleMessage !== "function") continue;
-              const handled = await plugin.handleMessage({ sock, jid, message, text, config, plugins });
+              const handled = await plugin.handleMessage({ sock, jid, message, text, config, plugins, session });
               if (handled) {
                 passivePluginHandled = true;
                 break;
@@ -486,6 +647,7 @@ async function startBot() {
                   command: autoDownload.plugin.name,
                   config,
                   plugins,
+                  session,
                   receivedAt,
                   isPrivileged: false,
                   setMode: (mode) => { config.mode = mode; },
@@ -500,7 +662,7 @@ async function startBot() {
           const senderIds = [
             message.key?.participant,
             message.key?.participantAlt,
-            ...(message.key?.fromMe ? [sock.user?.id, sock.user?.lid, config.botNumber] : [message.key?.remoteJid]),
+            ...(message.key?.fromMe ? [sock.user?.id, sock.user?.lid, currentNumber] : [message.key?.remoteJid]),
           ].filter(Boolean);
           const senderNumbers = senderIds
             .map((id) => String(id).split("@")[0].split(":")[0].replace(/\D/g, ""))
@@ -510,6 +672,7 @@ async function startBot() {
             String(data.ownerNumber || config.ownerNumber || "").replace(/\D/g, ""),
             ...(config.sudoNumbers || []),
             ...(Array.isArray(data.sudo) ? data.sudo : []),
+            currentNumber,
           ].filter(Boolean);
           const isPrivileged = senderNumbers.some((number) =>
             allowedNumbers.some((allowed) => number === allowed || number.endsWith(allowed) || allowed.endsWith(number))
@@ -532,36 +695,167 @@ async function startBot() {
           if (!plugin) continue;
 
           await plugin.execute({
-            sock, jid, message, args, query, command, config, plugins,
+            sock, jid, message, args, query, command, config, plugins, session,
             receivedAt, isPrivileged,
             setMode: (mode) => { config.mode = mode; },
           });
         } catch (error) {
-          console.error("[GALAXY-MD] Message handler error:", error.message || error);
+          console.error(`[GALAXY-MD] ${label} message handler error:`, error.message || error);
         }
       }
     });
-  } catch (error) {
-    console.error("[GALAXY-MD] Startup error:", error.stack || error);
-    starting = false;
 
-    if (!reconnectTimer) {
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        startBot().catch((err) => console.error("[GALAXY-MD] Restart error:", err));
+    return entry;
+  } catch (error) {
+    console.error(`[GALAXY-MD] ${label} startup error:`, error.stack || error);
+    entry.status = "error";
+    entry.rejectCode(error);
+
+    if (!entry.stopped && !shuttingDown && !entry.reconnectTimer) {
+      entry.reconnectTimer = setTimeout(() => {
+        entry.reconnectTimer = null;
+        startSession(session).catch((err) =>
+          console.error(`[GALAXY-MD] ${label} restart error:`, err)
+        );
       }, 5000);
     }
+    return entry;
+  } finally {
+    if (live.get(session.slot) === entry) entry.starting = false;
   }
 }
 
+function slotStatus(slot) {
+  return live.get(slot)?.status || "offline";
+}
+
+runtime.getLimits = () => ({
+  max: store.MAX_SESSIONS,
+  used: store.getUsedSlots().length,
+  mainNumber: store.sanitizeNumber(config.botNumber),
+});
+
+runtime.listSessions = () => {
+  const sessions = [{
+    slot: 1,
+    number: store.sanitizeNumber(config.botNumber),
+    status: slotStatus(1),
+    isPrimary: true,
+  }];
+  for (const clone of store.listClones()) {
+    sessions.push({
+      slot: clone.slot,
+      number: clone.number,
+      status: slotStatus(clone.slot),
+      isPrimary: false,
+    });
+  }
+  return sessions;
+};
+
+runtime.startClone = async function startClone(number) {
+  const clean = store.sanitizeNumber(number);
+  if (!store.isValidNumber(clean)) {
+    return { ok: false, reason: "Invalid number. Use country code + number, e.g. 919876543210." };
+  }
+  if (clean === store.sanitizeNumber(config.botNumber)) {
+    return { ok: false, reason: "That number is already the main bot." };
+  }
+  if (store.isNumberPaired(clean)) {
+    return { ok: false, reason: "That number is already paired." };
+  }
+
+  const reserved = store.addClone(clean);
+  if (!reserved) {
+    return {
+      ok: false,
+      reason: `No free slot. Maximum ${store.MAX_SESSIONS} sessions (main + clones) are allowed. Use .unpair first.`,
+    };
+  }
+
+  try {
+    const entry = await startSession({
+      slot: reserved.slot,
+      number: reserved.number,
+      dir: reserved.dir,
+      isPrimary: false,
+    });
+    const code = await withTimeout(entry.codePromise, 60000, "Pairing code timed out. Use .pair to try again.");
+    if (!code) {
+      return { ok: true, alreadyLinked: true, slot: reserved.slot, number: reserved.number, code: "" };
+    }
+    return { ok: true, slot: reserved.slot, number: reserved.number, code };
+  } catch (error) {
+    await stopSlot(reserved.slot);
+    store.removeClone({ slot: reserved.slot });
+    store.removeSessionDir(reserved.slot);
+    return { ok: false, reason: error?.message || String(error) };
+  }
+};
+
+runtime.stopClone = async function stopClone(value) {
+  const clones = store.listClones();
+  const clean = store.sanitizeNumber(value);
+  const all = String(value || "").trim().toLowerCase() === "all";
+  const targets = all ? clones : clones.filter((clone) =>
+    (clean && clone.number === clean) || String(clone.slot) === String(value || "").trim()
+  );
+  if (!targets.length) return { removed: [] };
+
+  for (const clone of targets) {
+    await stopSlot(clone.slot);
+    store.removeClone({ slot: clone.slot });
+    store.removeSessionDir(clone.slot);
+    console.log(`[GALAXY-MD] CLONE-${clone.slot} unpaired; session folder deleted.`);
+  }
+  return { removed: targets };
+};
+
+async function startAll() {
+  fs.mkdirSync(SESSION_DIR, { recursive: true });
+  const clones = store.discoverOrphans();
+
+  startSession({ slot: 1, number: sessionNumber({ slot: 1 }), dir: store.sessionDir(1), isPrimary: true })
+    .catch((error) => console.error("[GALAXY-MD] Main session fatal error:", error));
+
+  clones.forEach((clone, index) => {
+    setTimeout(() => {
+      if (shuttingDown) return;
+      startSession({
+        slot: clone.slot,
+        number: clone.number,
+        dir: clone.dir,
+        isPrimary: false,
+      }).catch((error) => console.error(`[GALAXY-MD] CLONE-${clone.slot} fatal error:`, error));
+    }, 1000 + index * 800);
+  });
+}
+
+function gracefulShutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log("[GALAXY-MD] Shutting down all sessions...");
+  for (const slot of Array.from(live.keys())) {
+    const entry = live.get(slot);
+    if (entry?.reconnectTimer) clearTimeout(entry.reconnectTimer);
+    entry.stopped = true;
+    try { entry.sock?.end?.(new Error("Bot shutting down")); } catch {}
+  }
+  live.clear();
+  setTimeout(() => process.exit(0), 500);
+}
+
+process.on("SIGINT", gracefulShutdown);
+process.on("SIGTERM", gracefulShutdown);
 process.on("unhandledRejection", (error) => console.error("[GALAXY-MD] Unhandled rejection:", error));
 process.on("uncaughtException", (error) => console.error("[GALAXY-MD] Uncaught exception:", error));
 
 console.log([
   "╔══════════════════════════════╗",
   "║        GALAXY-MD v2.0.0      ║",
-  "║    CommonJS • Baileys 7 RC14 ║",
+  "║  CommonJS • Baileys 7 RC14   ║",
+  `║  Multi-session: max ${store.MAX_SESSIONS} accounts  ║`,
   "╚══════════════════════════════╝",
 ].join("\n"));
 
-startBot().catch((error) => console.error("[GALAXY-MD] Fatal startup error:", error));
+startAll().catch((error) => console.error("[GALAXY-MD] Fatal startup error:", error));

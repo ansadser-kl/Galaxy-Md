@@ -8,6 +8,7 @@ A fast, plugin-based **WhatsApp bot** built on **Baileys** with **CommonJS plugi
 
 - **Pairing-code login:** link the bot with a code, no QR scan needed.
 - **Session persistence:** the login is saved in `session/` and reused after restarts.
+- **Bot cloning (multi-session):** run up to 4 WhatsApp accounts in one deployment with `.pair <number>`. Each clone has its own session folder. Logged-out sessions are deleted automatically.
 - **Auto-reconnect** after temporary network drops.
 - **Modular plugins:** every command is a separate `.js` file inside `plugins/`.
 - **Downloaders:** YouTube (video, audio, quality list, search), Spotify, Instagram, Facebook, TikTok, Pinterest, X/Twitter and TeraBox, with automatic fallback between several APIs.
@@ -98,7 +99,8 @@ Put these in `.env` (or in the Variables panel of your host, for example Railway
 | `MODE` | No | `public` | `public` for everyone, `private` for owner and SUDO only. Change it later with `.mode`. |
 | `BOT_NAME` | No | `GALAXY-MD` | Name shown by the bot. |
 | `PREFIX` | No | `.` | Command prefix. Change it later with `.setprefix`. |
-| `SESSION_DIR` | No | `./session` | Folder for the WhatsApp login. On Railway use a persistent volume, for example `/data/session`. |
+| `SESSION_DIR` | No | `./session` | Folder for the WhatsApp login. Clones use `session2`, `session3`, ... next to it. On Railway use a persistent volume, for example `/data/session`. |
+| `MAX_SESSIONS` | No | `4` | Total live WhatsApp accounts per deployment: main bot + clones. `4` means main + up to 3 clones. `MAX_PAIRS` is accepted as an alias. |
 | `WA_BROWSER` | No | `android` | Linked-device type. `android` is needed for view-once media. Use `chrome` if linking fails, `safari` for Safari. |
 | `FFMPEG_PATH` | No | `ffmpeg` | Full path of FFmpeg if it is not on `PATH`. |
 | `FFPROBE_PATH` | No | `ffprobe` | Full path of `ffprobe`, used by `.callplay` to end the call when the song finishes. |
@@ -190,6 +192,9 @@ The default prefix is `.`. Send `.menu` inside WhatsApp to see the list. Command
 | `.setsudo` `.getsudo` `.delsudo` | Manage SUDO numbers (owner / SUDO) |
 | `.setimage <URL>` `.setvideo <URL>` | Save an image or video URL for the bot (owner / SUDO) |
 | `.reboot` | Restart the bot process (owner / SUDO) |
+| `.pair <number>` | Create a clone with its own pairing code (owner / SUDO) |
+| `.unpair <number\|slot\|all>` | Stop a clone, delete its session folder and free the slot (owner / SUDO) |
+| `.sessions` | List live sessions, their numbers and status (owner / SUDO) |
 | `.send number\|message` | Send a message to a number (owner / SUDO) |
 | `.forward number` | **Reply** to a message to forward it to a number |
 | `.fd <jid>` | **Reply** to an audio to send it as a voice note to a JID or channel |
@@ -202,6 +207,30 @@ The bot also answers with a random voice note when the bot or the owner is menti
 `.autovv` is on by default. Every view-once photo, video or voice note that reaches the bot is sent to the owner number, and the sender is mentioned in the caption. Use `.autovv off` to stop it and `.autovv status` to see the state.
 
 WhatsApp sends view-once media only to Android-type linked devices, so keep `WA_BROWSER=android` (the default). If the bot was linked with another type, delete the `session/` folder and link again.
+
+## Bot cloning (multi-session)
+
+One deployment can run several WhatsApp accounts at once. The main bot uses `session/`, and each clone gets its own folder: `session2/`, `session3/`, etc.
+
+1. From the owner/SUDO account, send:
+
+   ```
+   .pair 919876543210
+   ```
+
+2. The bot replies with a **pairing code**. On that phone open **WhatsApp → Linked devices → Link with phone number** and enter the code.
+
+3. When the code is accepted, the clone comes online and runs the same plugins as the main bot. It reconnects automatically after restarts using its saved session.
+
+Rules:
+
+- **Maximum 4 sessions per deployment by default** (main + 3 clones). Change it with `MAX_SESSIONS` in `.env`.
+- Only the owner and SUDO numbers can pair, unpair or list sessions.
+- A clone works **only while its WhatsApp session is live**. If that number logs out from WhatsApp (Linked devices → Log out), the bot detects the logout and **deletes that clone's session folder automatically**, freeing the slot for a new `.pair`.
+- `.unpair <number>` removes a clone manually. `.unpair all` removes every clone. The main session is never removed this way.
+- `.sessions` shows slot, number and live status.
+- Session slots are stored in `galaxy-sessions.json` next to the session folder (for the default setup, in the project root; for `SESSION_DIR=/data/session`, in `/data/galaxy-sessions.json`). Keep it on persistent storage with the sessions.
+- Run only one bot process per deployment; two processes using the same session folder cause WhatsApp conflicts (`440`).
 
 ## Call play (experimental)
 
@@ -264,10 +293,10 @@ Files in `plugins/` that do not export a valid plugin are skipped, and the log s
 
 ## Deployment and security notes
 
-- Keep `.env`, `session/`, `call-session/` and any private credentials out of version control.
+- Keep `.env`, `session/`, `session2/`, `session3/`, `galaxy-sessions.json`, `call-session/` and any private credentials out of version control.
 - `.env.example` contains placeholders only.
 - Run only **one** live bot per WhatsApp session.
-- **Railway:** add a persistent Volume mounted at `/data` and set `SESSION_DIR=/data/session`, otherwise the bot must be linked again after every redeploy.
+- **Railway:** add a persistent Volume mounted at `/data` and set `SESSION_DIR=/data/session`, otherwise the bot and its clones must be linked again after every redeploy. The mount also holds `galaxy-sessions.json`, the registry of paired clones.
 - **Docker:** the included `Dockerfile` builds a Node 20 image with FFmpeg. Add `webp` to its `apt-get install` line for `.mp4`, and `git` if you use `.callplay`.
 - Files changed on the server over SSH are lost on redeploy. Push your changes to GitHub.
 
